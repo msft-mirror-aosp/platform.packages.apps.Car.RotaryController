@@ -24,6 +24,7 @@ import android.graphics.Rect;
 import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.SystemClock;
+import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -78,7 +79,7 @@ public class RotaryService extends AccessibilityService implements
     private static final boolean TREAT_APP_WINDOW_AS_SYSTEM_WINDOW = false;
 
     @NonNull
-    private static Utils sUtils = Utils.getInstance();
+    private NodeCopier mNodeCopier = new NodeCopier();
 
     /**
      * A {@link Rect}. Though it's a member variable, it's meant to be used as a local variable to
@@ -152,6 +153,7 @@ public class RotaryService extends AccessibilityService implements
         map.put(KeyEvent.KEYCODE_I, KeyEvent.KEYCODE_SYSTEM_NAVIGATION_UP);
         map.put(KeyEvent.KEYCODE_K, KeyEvent.KEYCODE_SYSTEM_NAVIGATION_DOWN);
         map.put(KeyEvent.KEYCODE_COMMA, KeyEvent.KEYCODE_DPAD_CENTER);
+        map.put(KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_BACK);
 
         TEST_TO_REAL_KEYCODE_MAP = Collections.unmodifiableMap(map);
     }
@@ -169,7 +171,9 @@ public class RotaryService extends AccessibilityService implements
     private Car mCar;
     private CarInputManager mCarInputManager;
     private InputManager mInputManager;
-    private DirectManipulationHelper mDirectManipulationHelper;
+
+    /** Package name of foreground app. */
+    private CharSequence mForegroundApp;
 
     @Override
     public void onCreate() {
@@ -203,8 +207,6 @@ public class RotaryService extends AccessibilityService implements
                 focusAreaHistoryCacheType,
                 focusAreaHistoryCacheSize,
                 focusAreaHistoryExpirationTimeMs);
-
-        mDirectManipulationHelper = new DirectManipulationHelper(this);
     }
 
     @Override
@@ -251,7 +253,7 @@ public class RotaryService extends AccessibilityService implements
                     // between windows.
                     AccessibilityNodeInfo sourceNode = event.getSource();
                     if (sourceNode != null && !sourceNode.equals(mFocusedNode)
-                            && !Navigator.isFocusParkingView(sourceNode)) {
+                            && !Utils.isFocusParkingView(sourceNode)) {
                         // Android doesn't clear focus automatically when focus is set in another
                         // window.
                         maybeClearFocusInCurrentWindow(sourceNode);
@@ -289,6 +291,11 @@ public class RotaryService extends AccessibilityService implements
             }
             case AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED: {
                 updateDirectManipulationMode(event, false);
+                break;
+            }
+            case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED: {
+                CharSequence packageName = event.getPackageName();
+                onForegroundAppChanged(packageName);
                 break;
             }
             default:
@@ -344,7 +351,7 @@ public class RotaryService extends AccessibilityService implements
         // Do nothing.
     }
 
-    private boolean isValidDisplayId(int displayId) {
+    private static boolean isValidDisplayId(int displayId) {
         if (displayId == CarInputManager.TARGET_DISPLAY_TYPE_MAIN) {
             return true;
         }
@@ -396,6 +403,12 @@ public class RotaryService extends AccessibilityService implements
                     // TODO: handleLongClickEvent(action);
                 }
                 return true;
+            case KeyEvent.KEYCODE_BACK:
+                if (mInDirectManipulationMode) {
+                    handleBackButtonEvent(action);
+                    return true;
+                }
+                return false;
             default:
                 // Do nothing
         }
@@ -415,8 +428,7 @@ public class RotaryService extends AccessibilityService implements
 
     /** Handles controller center button event. */
     private void handleCenterButtonEvent(int action) {
-        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
-            L.w("Invalid action " + action);
+        if (!isValidAction(action)) {
             return;
         }
         if (initFocus()) {
@@ -435,7 +447,7 @@ public class RotaryService extends AccessibilityService implements
 
         // Case 2: the focus is not in application window (e.g., in system window) and the focused
         // node supports direct manipulation, enter direct manipulation mode.
-        if (mDirectManipulationHelper.supportDirectManipulation(mFocusedNode)) {
+        if (DirectManipulationHelper.supportDirectManipulation(mFocusedNode)) {
             if (!mInDirectManipulationMode) {
                 mInDirectManipulationMode = true;
                 L.d("Enter direct manipulation mode because focused node is clicked.");
@@ -453,8 +465,7 @@ public class RotaryService extends AccessibilityService implements
     }
 
     private void handleNudgeEvent(int direction, int action) {
-        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
-            L.w("Invalid action " + action);
+        if (!isValidAction(action)) {
             return;
         }
         if (initFocus()) {
@@ -539,6 +550,42 @@ public class RotaryService extends AccessibilityService implements
         Utils.recycleNode(targetNode);
     }
 
+    /** Handles Back button event. */
+    private void handleBackButtonEvent(int action) {
+        if (!isValidAction(action)) {
+            return;
+        }
+
+        // If the focus is in application window, inject Back button event and the application will
+        // handle it. If the focus is not in application window, exit direct manipulation mode on
+        // key up.
+        if (isInApplicationWindow(mFocusedNode)) {
+            injectKeyEvent(KeyEvent.KEYCODE_BACK, action);
+        } else if (action == KeyEvent.ACTION_UP) {
+            L.d("Exit direct manipulation mode on back button event");
+            mInDirectManipulationMode = false;
+        }
+    }
+
+    private void onForegroundAppChanged(CharSequence packageName) {
+        if (TextUtils.equals(mForegroundApp, packageName)) {
+            return;
+        }
+        mForegroundApp = packageName;
+        if (mInDirectManipulationMode) {
+            L.d("Exit direct manipulation mode because the foreground app has changed");
+            mInDirectManipulationMode = false;
+        }
+    }
+
+    private static boolean isValidAction(int action) {
+        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
+            L.w("Invalid action " + action);
+            return false;
+        }
+        return true;
+    }
+
     /** Performs scroll action on the given {@code targetNode} if it supports scroll action. */
     private static void performScrollAction(@NonNull AccessibilityNodeInfo targetNode,
             boolean clockwise) {
@@ -569,7 +616,7 @@ public class RotaryService extends AccessibilityService implements
     }
 
     private void updateDirectManipulationMode(AccessibilityEvent event, boolean enable) {
-        if (!mInRotaryMode || !mDirectManipulationHelper.isDirectManipulation(event)) {
+        if (!mInRotaryMode || !DirectManipulationHelper.isDirectManipulation(event)) {
             return;
         }
         AccessibilityNodeInfo sourceNode = event.getSource();
@@ -682,7 +729,7 @@ public class RotaryService extends AccessibilityService implements
             L.e("Failed to get window of " + mFocusedNode);
             return;
         }
-        AccessibilityNodeInfo focusParkingView = Navigator.findFocusParkingView(window);
+        AccessibilityNodeInfo focusParkingView = mNavigator.findFocusParkingView(window);
         window.recycle();
         if (focusParkingView == null) {
             L.e("No FocusParkingView in " + window);
@@ -726,7 +773,7 @@ public class RotaryService extends AccessibilityService implements
             L.e("rootNode of active window is null");
             return;
         }
-        AccessibilityNodeInfo targetNode = Navigator.findFirstFocusDescendant(rootNode);
+        AccessibilityNodeInfo targetNode = mNavigator.findFirstFocusDescendant(rootNode);
         rootNode.recycle();
         if (targetNode == null) {
             L.w("Failed to find the first focus descendant");
@@ -752,10 +799,10 @@ public class RotaryService extends AccessibilityService implements
             L.d("Don't reset mFocusedNode since it stays the same: " + mFocusedNode);
             return;
         }
-        if (mInDirectManipulationMode) {
-            // Toggle off direct manipulation mode since the focus has changed.
+        if (mInDirectManipulationMode && focusedNode == null) {
+            // Toggle off direct manipulation mode since there is no focused node.
             mInDirectManipulationMode = false;
-            L.d("Exit direct manipulation mode since the focus has changed");
+            L.d("Exit direct manipulation mode since there is no focused node");
         }
 
         Utils.recycleNode(mFocusedNode);
@@ -798,7 +845,6 @@ public class RotaryService extends AccessibilityService implements
             return true;
         }
         if (targetNode.isFocused()) {
-            // TODO(b/154560076): find out why isFocused() returned true though it's not focused.
             L.w("targetNode is already focused: " + targetNode);
         }
         boolean result = targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
@@ -838,7 +884,7 @@ public class RotaryService extends AccessibilityService implements
         return result;
     }
 
-    private static AccessibilityNodeInfo copyNode(@Nullable AccessibilityNodeInfo node) {
-        return sUtils.copyNode(node);
+    private AccessibilityNodeInfo copyNode(@Nullable AccessibilityNodeInfo node) {
+        return mNodeCopier.copy(node);
     }
 }
