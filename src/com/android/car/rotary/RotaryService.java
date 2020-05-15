@@ -242,6 +242,17 @@ public class RotaryService extends AccessibilityService implements
     }
 
     @Override
+    public void onDestroy() {
+        if (mCarInputManager != null) {
+            mCarInputManager.releaseInputEventCapture(CarInputManager.TARGET_DISPLAY_TYPE_MAIN);
+        }
+        if (mCar != null) {
+            mCar.disconnect();
+        }
+        super.onDestroy();
+    }
+
+    @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         switch (event.getEventType()) {
             case AccessibilityEvent.TYPE_VIEW_FOCUSED: {
@@ -619,15 +630,24 @@ public class RotaryService extends AccessibilityService implements
         if (!mInRotaryMode || !DirectManipulationHelper.isDirectManipulation(event)) {
             return;
         }
-        AccessibilityNodeInfo sourceNode = event.getSource();
-        if (sourceNode != null && sourceNode.equals(mFocusedNode)) {
-            if (mInDirectManipulationMode != enable) {
-                // Toggle direct manipulation mode upon app's request.
-                mInDirectManipulationMode = enable;
-                L.d((enable ? "Enter" : "Exit") + " direct manipulation mode upon app's request");
+        if (enable) {
+            mFocusedNode = Utils.refreshNode(mFocusedNode);
+            if (mFocusedNode == null) {
+                L.w("Failed to enter direct manipulation mode because mFocusedNode is no longer "
+                        + "in view tree.");
+                return;
+            }
+            if (!mFocusedNode.isFocused()) {
+                L.w("Failed to enter direct manipulation mode because mFocusedNode is no longer "
+                        + "focused.");
+                return;
             }
         }
-        Utils.recycleNode(sourceNode);
+        if (mInDirectManipulationMode != enable) {
+            // Toggle direct manipulation mode upon app's request.
+            mInDirectManipulationMode = enable;
+            L.d((enable ? "Enter" : "Exit") + " direct manipulation mode upon app's request");
+        }
     }
 
     private void injectMotionEvent(boolean clockwise, int rotationCount, float x, float y) {
