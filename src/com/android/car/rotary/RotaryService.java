@@ -23,6 +23,8 @@ import static android.view.accessibility.AccessibilityEvent.TYPE_VIEW_SCROLLED;
 import static android.view.accessibility.AccessibilityEvent.TYPE_WINDOWS_CHANGED;
 import static android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
 import static android.view.accessibility.AccessibilityEvent.WINDOWS_CHANGE_REMOVED;
+import static android.view.Display.DEFAULT_DISPLAY;
+import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD;
 
@@ -31,11 +33,14 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.car.Car;
 import android.car.input.CarInputManager;
 import android.car.input.RotaryEvent;
+import android.content.Context;
 import android.content.res.Resources;
+import android.hardware.display.DisplayManager;
 import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -264,6 +269,8 @@ public class RotaryService extends AccessibilityService implements
     /** Package name of foreground app. */
     private CharSequence mForegroundApp;
 
+    private WindowManager mWindowManager;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -319,6 +326,32 @@ public class RotaryService extends AccessibilityService implements
                 hunLeft,
                 hunRight,
                 showHunOnBottom);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * We need to access WindowManager in onCreate() and
+     * IAccessibilityServiceClientWrapper.Callbacks#init(). Since WindowManager is a visual
+     * service, only Activity or other visual Context can access it. So we create a window context
+     * (a visual context) and delegate getSystemService() to it.
+     */
+    @Override
+    public Object getSystemService(@ServiceName @NonNull String name) {
+        // Guarantee that we always return the same WindowManager instance.
+        if (WINDOW_SERVICE.equals(name)) {
+            if (mWindowManager == null) {
+                // We need to set the display before creating the WindowContext.
+                DisplayManager displayManager = getSystemService(DisplayManager.class);
+                Display primaryDisplay = displayManager.getDisplay(DEFAULT_DISPLAY);
+                updateDisplay(primaryDisplay.getDisplayId());
+
+                Context windowContext = createWindowContext(TYPE_APPLICATION_OVERLAY, null);
+                mWindowManager = (WindowManager) windowContext.getSystemService(WINDOW_SERVICE);
+            }
+            return mWindowManager;
+        }
+        return super.getSystemService(name);
     }
 
     @Override
@@ -1119,35 +1152,47 @@ public class RotaryService extends AccessibilityService implements
         return true;
     }
 
-    /**
-     * Clears the current rotary focus if {@code targetFocus} is in a different window.
-     * If we really clear focus in the current window, Android will re-focus a view in the current
-     * window automatically, resulting in the current window and the target window being focused
-     * simultaneously. To avoid that we don't really clear the focus. Instead, we "park" the focus
-     * on a FocusParkingView in the current window. FocusParkingView is transparent no matter
-     * whether it's focused or not, so it's invisible to the user.
-     */
+    /** Clears the current rotary focus if {@code targetFocus} is in a different window. */
     private void maybeClearFocusInCurrentWindow(@NonNull AccessibilityNodeInfo targetFocus) {
         if (mFocusedNode == null || !mFocusedNode.isFocused()
                 || mFocusedNode.getWindowId() == targetFocus.getWindowId()) {
             return;
         }
+        if (clearFocusInCurrentWindow()) {
+            setFocusedNode(null);
+        }
+    }
 
+    /**
+     * Clears the current rotary focus.
+     * <p>
+     * If we really clear focus in the current window, Android will re-focus a view in the current
+     * window automatically, resulting in the current window and the target window being focused
+     * simultaneously. To avoid that we don't really clear the focus. Instead, we "park" the focus
+     * on a FocusParkingView in the current window. FocusParkingView is transparent no matter
+     * whether it's focused or not, so it's invisible to the user.
+     *
+     * @return whether the FocusParkingView was focused successfully
+     */
+    private boolean clearFocusInCurrentWindow() {
+        if (mFocusedNode == null) {
+            L.e("Don't call clearFocusInCurrentWindow() when mFocusedNode is null");
+            return false;
+        }
         AccessibilityWindowInfo window = mFocusedNode.getWindow();
         if (window == null) {
             L.w("Failed to get window of " + mFocusedNode);
-            return;
+            return false;
         }
         AccessibilityNodeInfo focusParkingView = mNavigator.findFocusParkingView(window);
-        window.recycle();
         if (focusParkingView == null) {
             L.e("No FocusParkingView in " + window);
-            return;
+            window.recycle();
+            return false;
         }
-
+        window.recycle();
         boolean result = focusParkingView.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
         if (result) {
-            setFocusedNode(null);
             if (mFocusParkingView != null) {
                 L.e("mFocusParkingView should be null but is " + mFocusParkingView);
                 Utils.recycleNode(mFocusParkingView);
@@ -1156,8 +1201,8 @@ public class RotaryService extends AccessibilityService implements
         } else {
             L.w("Failed to perform ACTION_FOCUS on " + focusParkingView);
         }
-
         focusParkingView.recycle();
+        return result;
     }
 
     /**
@@ -1294,13 +1339,33 @@ public class RotaryService extends AccessibilityService implements
         }
         if (targetNode.isFocused()) {
             L.w("targetNode is already focused: " + targetNode);
-        } else {
-            boolean result = targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
-            if (!result) {
-                L.w("Failed to perform ACTION_FOCUS on node " + targetNode);
-                return result;
-            }
+            setFocusedNode(targetNode);
+            return true;
         }
+        boolean focusCleared = false;
+        if (Utils.hasFocus(targetNode)){
+            // One of targetNode's descendants is already focused, so we can't perform ACTION_FOCUS
+            // on targetNode directly. The workaround is to clear the focus first (by focusing on
+            // the FocusParkingView), then focus on targetNode.
+            L.d("One of targetNode's descendants is already focused: " + targetNode);
+            if (!clearFocusInCurrentWindow()) {
+                return false;
+            }
+            focusCleared = true;
+        }
+        // Now we can perform ACTION_FOCUS on targetNode since it doesn't have focus, or its
+        // descendant's focus has been cleared.
+        boolean result = targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+        if (!result) {
+            L.w("Failed to perform ACTION_FOCUS on node " + targetNode);
+            // Previously we cleared the focus of targetNode's descendant, which won't reset the
+            // focused node to null. So we need to reset it manually.
+            if (focusCleared) {
+                setFocusedNode(null);
+            }
+            return false;
+        }
+
         setFocusedNode(targetNode);
         return true;
     }
