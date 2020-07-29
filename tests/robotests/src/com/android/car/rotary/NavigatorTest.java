@@ -270,6 +270,55 @@ public class NavigatorTest {
     }
 
     /**
+     * Tests {@link Navigator#findRotateTarget} in the following node tree:
+     * <pre>
+     *                     root
+     *                    /    \
+     *                  /       \
+     *    focusParkingView    scrollableContainer
+     *                               /    \
+     *                              /      \
+     *                      focusable1    focusable2
+     * </pre>
+     */
+    @Test
+    public void testFindRotateTargetSkipScrollableContainer2() {
+        AccessibilityNodeInfo root = mNodeBuilder.build();
+        AccessibilityNodeInfo focusParkingView = mNodeBuilder.setParent(root).setFpv().build();
+        AccessibilityNodeInfo scrollableContainer = mNodeBuilder
+                .setParent(root)
+                .setScrollableContainer()
+                .build();
+        AccessibilityNodeInfo focusable1 = mNodeBuilder.setParent(scrollableContainer).build();
+        AccessibilityNodeInfo focusable2 = mNodeBuilder.setParent(scrollableContainer).build();
+
+        int direction = View.FOCUS_BACKWARD;
+        when(focusable2.focusSearch(direction)).thenReturn(focusable1);
+        when(focusable1.focusSearch(direction)).thenReturn(scrollableContainer);
+        when(scrollableContainer.focusSearch(direction)).thenReturn(focusParkingView);
+
+        FindRotateTargetResult target = mNavigator.findRotateTarget(focusable2, direction, 2);
+        assertThat(target.node).isSameAs(focusable1);
+        assertThat(target.advancedCount).isEqualTo(1);
+    }
+
+    /**
+     * Tests {@link Navigator#findRotateTarget} in the following node tree:
+     * <pre>
+     *             node
+     * </pre>
+     */
+    @Test
+    public void testFindRotateTargetWithOneNode() {
+        AccessibilityNodeInfo node = mNodeBuilder.build();
+        int direction = View.FOCUS_BACKWARD;
+        when(node.focusSearch(direction)).thenReturn(node);
+
+        FindRotateTargetResult target = mNavigator.findRotateTarget(node, direction, 1);
+        assertThat(target).isNull();
+    }
+
+    /**
      * Tests {@link Navigator#findRotateTarget} in the following layout:
      * <pre>
      *     ============ focus area ============
