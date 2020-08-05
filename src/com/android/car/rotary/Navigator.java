@@ -18,7 +18,13 @@ package com.android.car.rotary;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD;
 
+import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_HIGHLIGHT_BOTTOM_PADDING;
+import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_HIGHLIGHT_LEFT_PADDING;
+import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_HIGHLIGHT_RIGHT_PADDING;
+import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_HIGHLIGHT_TOP_PADDING;
+
 import android.graphics.Rect;
+import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -353,8 +359,7 @@ class Navigator {
                 // If we're navigating through a scrolling view that can scroll in the specified
                 // direction and the next view is off-screen, don't advance to it. (We'll scroll
                 // the remaining count instead.)
-                Rect nextTargetBounds = new Rect();
-                nextCandidate.getBoundsInScreen(nextTargetBounds);
+                Rect nextTargetBounds = getBoundsInScreen(nextCandidate);
                 AccessibilityNodeInfo scrollableContainer = findScrollableContainer(candidate);
                 AccessibilityNodeInfo.AccessibilityAction scrollAction =
                         direction == View.FOCUS_FORWARD
@@ -362,8 +367,7 @@ class Navigator {
                                 : ACTION_SCROLL_BACKWARD;
                 if (scrollableContainer != null
                         && scrollableContainer.getActionList().contains(scrollAction)) {
-                    Rect scrollBounds = new Rect();
-                    scrollableContainer.getBoundsInScreen(scrollBounds);
+                    Rect scrollBounds = getBoundsInScreen(scrollableContainer);
                     boolean intersects = nextTargetBounds.intersect(scrollBounds);
                     if (!intersects) {
                         Utils.recycleNode(nextCandidate);
@@ -678,7 +682,7 @@ class Navigator {
      *
      * @param containerNode the node with descendants
      * @param referenceNode a descendant of {@code containerNode} to start from
-     * @param direction {@link View#FOCUS_FORWARD} or {@link View#FOCUS_BACKWARD}
+     * @param direction     {@link View#FOCUS_FORWARD} or {@link View#FOCUS_BACKWARD}
      * @return the node before or after {@code referenceNode} or null if none
      */
     @Nullable
@@ -763,16 +767,16 @@ class Navigator {
         if (candidates.isEmpty()) {
             return null;
         }
-        Rect sourceBounds = new Rect();
-        sourceNode.getBoundsInScreen(sourceBounds);
-
+        Rect sourceBounds = getBoundsInScreen(sourceNode);
+        AccessibilityNodeInfo sourceFocusArea = getAncestorFocusArea(sourceNode);
+        Rect sourceFocusAreaBounds = getBoundsInScreen(sourceFocusArea);
+        sourceFocusArea.recycle();
         AccessibilityNodeInfo bestNode = null;
         Rect bestBounds = new Rect();
 
-        Rect candidateBounds = new Rect();
         for (AccessibilityNodeInfo candidate : candidates) {
-            if (isCandidate(sourceBounds, candidate, direction)) {
-                candidate.getBoundsInScreen(candidateBounds);
+            if (isCandidate(sourceBounds, sourceFocusAreaBounds, candidate, direction)) {
+                Rect candidateBounds = getBoundsInScreen(candidate);
                 if (bestNode == null || FocusFinder.isBetterCandidate(
                         direction, sourceBounds, candidateBounds, bestBounds)) {
                     bestNode = candidate;
@@ -785,22 +789,42 @@ class Navigator {
 
     /**
      * Returns whether the given {@code node} is a candidate from {@code sourceBounds} to the given
-     * {@code direction}. To be a candidate, the node or one of its descendants must be able to take
-     * focus and must be considered a candidate by {@link FocusFinder#isCandidate}.
+     * {@code direction}.
+     * <p>
+     * To be a candidate, the node
+     * <ul>
+     *     <li>must be considered a candidate by {@link FocusFinder#isCandidate} if it represents a
+     *         focusable view within a focus area
+     *     <li>must be in the {@code direction} of the {@code sourceFocusAreaBounds} and one of its
+     *         focusable descendants must be a candidate if it represents a focus area
+     * </ul>
      */
     private boolean isCandidate(@NonNull Rect sourceBounds,
+            @NonNull Rect sourceFocusAreaBounds,
             @NonNull AccessibilityNodeInfo node,
             int direction) {
-        AccessibilityNodeInfo candidate = mTreeTraverser.depthFirstSearch(node, candidateNode -> {
-            // First check if the node can take focus.
-            if (!Utils.canTakeFocus(candidateNode)) {
-                return false;
-            }
-            // The node represents a focusable view in the FocusArea, so check the geometry.
-            Rect candidateBounds = new Rect();
-            candidateNode.getBoundsInScreen(candidateBounds);
-            return FocusFinder.isCandidate(sourceBounds, candidateBounds, direction);
-        });
+        AccessibilityNodeInfo candidate = mTreeTraverser.depthFirstSearch(node,
+                /* skipPredicate= */ candidateNode -> {
+                    if (Utils.canTakeFocus(candidateNode)) {
+                        return false;
+                    }
+                    // If a node can't take focus, it represents a focus area. If the focus area is
+                    // not in the given direction of the source focus area, it's not a candidate,
+                    // so we should return true to stop searching.
+                    Rect candidateBounds = getBoundsInScreen(candidateNode);
+                    return !FocusFinder.isInDirection(
+                            sourceFocusAreaBounds, candidateBounds, direction);
+                },
+                /* targetPredicate= */ candidateNode -> {
+                    // If a node can't take focus, it represents a focus area, so we return false to
+                    // skip the node and let it search its descendants.
+                    if (!Utils.canTakeFocus(candidateNode)) {
+                        return false;
+                    }
+                    // The node represents a focusable view in a focus area, so check the geometry.
+                    Rect candidateBounds = getBoundsInScreen(candidateNode);
+                    return FocusFinder.isCandidate(sourceBounds, candidateBounds, direction);
+                });
         if (candidate == null) {
             return false;
         }
@@ -854,5 +878,20 @@ class Navigator {
             this.node = node;
             this.advancedCount = advancedCount;
         }
+    }
+
+    @NonNull
+    private static Rect getBoundsInScreen(@NonNull AccessibilityNodeInfo node) {
+        Rect bounds = new Rect();
+        node.getBoundsInScreen(bounds);
+        if (Utils.isFocusArea(node)) {
+            // The bounds of a FocusArea is its bounds minus its highlight paddings.
+            Bundle bundle = node.getExtras();
+            bounds.left += bundle.getInt(FOCUS_AREA_HIGHLIGHT_LEFT_PADDING);
+            bounds.right -= bundle.getInt(FOCUS_AREA_HIGHLIGHT_RIGHT_PADDING);
+            bounds.top += bundle.getInt(FOCUS_AREA_HIGHLIGHT_TOP_PADDING);
+            bounds.bottom -= bundle.getInt(FOCUS_AREA_HIGHLIGHT_BOTTOM_PADDING);
+        }
+        return bounds;
     }
 }
