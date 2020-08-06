@@ -180,11 +180,11 @@ public class NavigatorTest {
      *                         /  |  \
      *                       /    |    \
      *                     /      |      \
-     *               button1   invisible  button2
+     *               button1   invisible   button2
      * </pre>
      */
     @Test
-    public void testFindRotateTargetSkipNodeThatCannotPerformFocus() {
+    public void testFindRotateTargetDoesNotSkipInvisibleNode() {
         AccessibilityNodeInfo root = mNodeBuilder.build();
         AccessibilityNodeInfo button1 = mNodeBuilder.setParent(root).build();
         AccessibilityNodeInfo invisible = mNodeBuilder
@@ -197,7 +197,36 @@ public class NavigatorTest {
         when(button1.focusSearch(direction)).thenReturn(invisible);
         when(invisible.focusSearch(direction)).thenReturn(button2);
 
-        // Rotate from button1, it should skip the invisible view.
+        // Rotate from button1, it shouldn't skip the invisible view.
+        FindRotateTargetResult target = mNavigator.findRotateTarget(button1, direction, 1);
+        assertThat(target.node).isSameAs(invisible);
+    }
+
+    /**
+     * Tests {@link Navigator#findRotateTarget} in the following node tree:
+     * <pre>
+     *                          root
+     *                         /  |  \
+     *                       /    |    \
+     *                     /      |      \
+     *               button1   empty   button2
+     * </pre>
+     */
+    @Test
+    public void testFindRotateTargetSkipNodeThatCannotPerformFocus() {
+        AccessibilityNodeInfo root = mNodeBuilder.build();
+        AccessibilityNodeInfo button1 = mNodeBuilder.setParent(root).build();
+        AccessibilityNodeInfo empty = mNodeBuilder
+                .setParent(root)
+                .setBoundsInScreen(new Rect(0, 0, 0, 10))
+                .build();
+        AccessibilityNodeInfo button2 = mNodeBuilder.setParent(root).build();
+
+        int direction = View.FOCUS_FORWARD;
+        when(button1.focusSearch(direction)).thenReturn(empty);
+        when(empty.focusSearch(direction)).thenReturn(button2);
+
+        // Rotate from button1, it should skip the empty view.
         FindRotateTargetResult target = mNavigator.findRotateTarget(button1, direction, 1);
         assertThat(target.node).isSameAs(button2);
     }
@@ -300,6 +329,22 @@ public class NavigatorTest {
         FindRotateTargetResult target = mNavigator.findRotateTarget(focusable2, direction, 2);
         assertThat(target.node).isSameAs(focusable1);
         assertThat(target.advancedCount).isEqualTo(1);
+    }
+
+    /**
+     * Tests {@link Navigator#findRotateTarget} in the following node tree:
+     * <pre>
+     *             node
+     * </pre>
+     */
+    @Test
+    public void testFindRotateTargetWithOneNode() {
+        AccessibilityNodeInfo node = mNodeBuilder.build();
+        int direction = View.FOCUS_BACKWARD;
+        when(node.focusSearch(direction)).thenReturn(node);
+
+        FindRotateTargetResult target = mNavigator.findRotateTarget(node, direction, 1);
+        assertThat(target).isNull();
     }
 
     /**
@@ -854,6 +899,114 @@ public class NavigatorTest {
      * <pre>
      * In the same window
      *
+     *          =======app bar focus area=========
+     *          =             *tab*              =
+     *          ==================================
+     *          =====browse list focus area ======
+     *          =                                =
+     *          =                                =
+     *          =         *list item 1*          =
+     *          =                                =
+     *          =                                =
+     *          =  ===control bar focus area===  =
+     *          =  =   *control bar button*   =  =
+     *          =  ============================  =
+     *          =                                =
+     *          =        *list item 2*           =
+     *          ==================================
+     * </pre>
+     */
+    @Test
+    public void testNudgeToOverlappedFocusArea() {
+        Rect windowBounds = new Rect(0, 0, 100, 100);
+        AccessibilityWindowInfo window = new WindowBuilder()
+                .setBoundsInScreen(windowBounds)
+                .build();
+        AccessibilityNodeInfo root = mNodeBuilder
+                .setWindow(window)
+                .setBoundsInScreen(windowBounds)
+                .build();
+        setRootNodeForWindow(root, window);
+
+        AccessibilityNodeInfo appBarFocusArea = mNodeBuilder
+                .setWindow(window)
+                .setParent(root)
+                .setFocusArea()
+                .setBoundsInScreen(new Rect(0, 0, 100, 10))
+                .build();
+        AccessibilityNodeInfo tab = mNodeBuilder
+                .setWindow(window)
+                .setParent(appBarFocusArea)
+                .setBoundsInScreen(new Rect(0, 0, 100, 10))
+                .build();
+
+        AccessibilityNodeInfo browseListFocusArea = mNodeBuilder
+                .setWindow(window)
+                .setParent(root)
+                .setFocusArea()
+                .setBoundsInScreen(new Rect(0, 10, 100, 100))
+                .build();
+        AccessibilityNodeInfo listItem1 = mNodeBuilder
+                .setWindow(window)
+                .setParent(browseListFocusArea)
+                .setBoundsInScreen(new Rect(0, 40, 100, 50))
+                .build();
+        AccessibilityNodeInfo listItem2 = mNodeBuilder
+                .setWindow(window)
+                .setParent(browseListFocusArea)
+                .setBoundsInScreen(new Rect(0, 90, 100, 100))
+                .build();
+
+        AccessibilityNodeInfo ControlBarFocusArea = mNodeBuilder
+                .setWindow(window)
+                .setParent(root)
+                .setFocusArea()
+                .setBoundsInScreen(new Rect(0, 80, 100, 90))
+                .build();
+        AccessibilityNodeInfo controlButton = mNodeBuilder
+                .setWindow(window)
+                .setParent(ControlBarFocusArea)
+                .setBoundsInScreen(new Rect(0, 80, 100, 90))
+                .build();
+
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(window);
+
+        // Nudge up from controlButton, it should go to listItem1.
+        AccessibilityNodeInfo target
+                = mNavigator.findNudgeTarget(windows, controlButton, View.FOCUS_UP);
+        assertThat(target).isSameAs(listItem1);
+
+        // Nudge up from listItem1, it should go to tab.
+        target = mNavigator.findNudgeTarget(windows, listItem1, View.FOCUS_UP);
+        assertThat(target).isSameAs(tab);
+
+        // Disable cache.
+        mNavigator = new Navigator(
+                /* focusHistoryCacheType= */ RotaryCache.CACHE_TYPE_DISABLED,
+                /* focusHistoryCacheSize= */ 10,
+                /* focusHistoryExpirationTimeMs= */ 0,
+                /* focusAreaHistoryCacheType= */ RotaryCache.CACHE_TYPE_DISABLED,
+                /* focusAreaHistoryCacheSize= */ 5,
+                /* focusAreaHistoryExpirationTimeMs= */ 0,
+                /* focusWindowCacheType= */ RotaryCache.CACHE_TYPE_DISABLED,
+                /* focusWindowCacheSize= */ 5,
+                /* focusWindowExpirationTimeMs= */ 0,
+                mHunWindowBounds.left,
+                mHunWindowBounds.right,
+                /* showHunOnBottom= */ false);
+        mNavigator.setNodeCopier(MockNodeCopierProvider.get());
+
+        // Nudge down from listItem1, it should go to controlButton.
+        target = mNavigator.findNudgeTarget(windows, listItem1, View.FOCUS_DOWN);
+        assertThat(target).isSameAs(controlButton);
+    }
+
+    /**
+     * Tests {@link Navigator#findNudgeTarget} in the following layout:
+     * <pre>
+     * In the same window
+     *
      *    =====source focus area=====
      *    = *    source view      * =
      *    ===========================
@@ -1266,6 +1419,88 @@ public class NavigatorTest {
         // Nudge from left window to right window.
         AccessibilityNodeInfo target = mNavigator.findNudgeTarget(windows, left, View.FOCUS_RIGHT);
         assertThat(target).isSameAs(focusable);
+    }
+
+    /**
+     * Tests {@link Navigator#findNudgeTarget} in the following layout:
+     * <pre>
+     * In the same window
+     *
+     *          ==========focus area 1============
+     *          =  .......highlight............  =
+     *          =  .        *view1*           .  =
+     *          =  .......paddings.............  =
+     *          =                                =
+     *          =  ========focus area 2========  =
+     *          =  =         *view2*          =  =
+     *          =  ============================  =
+     *          =                                =
+     *          =                                =
+     *          =                                =
+     *          =                                =
+     *          ==================================
+     *
+     *          ===========focus area 3===========
+     *          =            *view3*             =
+     *          ==================================
+     * </pre>
+     */
+    @Test
+    public void testFindNudgeTargetWithFocusAreaHighlightPadding() {
+        Rect windowBounds = new Rect(0, 0, 100, 100);
+        AccessibilityWindowInfo window = new WindowBuilder()
+                .setBoundsInScreen(windowBounds)
+                .build();
+        AccessibilityNodeInfo root = mNodeBuilder
+                .setWindow(window)
+                .setBoundsInScreen(windowBounds)
+                .build();
+        setRootNodeForWindow(root, window);
+
+        AccessibilityNodeInfo focusArea1 = mNodeBuilder
+                .setWindow(window)
+                .setParent(root)
+                .setFocusArea()
+                .setFocusAreaHighlightPadding(0, 0, 0, 70)
+                .setBoundsInScreen(new Rect(0, 0, 100, 80))
+                .build();
+        AccessibilityNodeInfo view1 = mNodeBuilder
+                .setWindow(window)
+                .setParent(focusArea1)
+                .setBoundsInScreen(new Rect(0, 0, 100, 10))
+                .build();
+
+        AccessibilityNodeInfo focusArea2 = mNodeBuilder
+                .setWindow(window)
+                .setParent(root)
+                .setFocusArea()
+                .setBoundsInScreen(new Rect(0, 10, 100, 20))
+                .build();
+        AccessibilityNodeInfo view2 = mNodeBuilder
+                .setWindow(window)
+                .setParent(focusArea2)
+                .setBoundsInScreen(new Rect(0, 10, 100, 20))
+                .build();
+
+        AccessibilityNodeInfo focusArea3 = mNodeBuilder
+                .setWindow(window)
+                .setParent(root)
+                .setFocusArea()
+                .setBoundsInScreen(new Rect(0, 90, 100, 100))
+                .build();
+        AccessibilityNodeInfo view3 = mNodeBuilder
+                .setWindow(window)
+                .setParent(focusArea3)
+                .setBoundsInScreen(new Rect(0, 90, 100, 100))
+                .build();
+
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(window);
+
+        // Nudge up from view3, it should go to view2.
+        AccessibilityNodeInfo target
+                = mNavigator.findNudgeTarget(windows, view3, View.FOCUS_UP);
+        assertThat(target).isSameAs(view2);
     }
 
     /**
