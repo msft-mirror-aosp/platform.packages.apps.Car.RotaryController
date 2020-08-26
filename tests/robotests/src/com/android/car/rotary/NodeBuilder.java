@@ -19,10 +19,10 @@ import static android.view.accessibility.AccessibilityWindowInfo.UNDEFINED_WINDO
 
 import static com.android.car.rotary.Utils.FOCUS_AREA_CLASS_NAME;
 import static com.android.car.rotary.Utils.FOCUS_PARKING_VIEW_CLASS_NAME;
-import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_HIGHLIGHT_BOTTOM_PADDING;
-import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_HIGHLIGHT_LEFT_PADDING;
-import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_HIGHLIGHT_RIGHT_PADDING;
-import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_HIGHLIGHT_TOP_PADDING;
+import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_BOTTOM_BOUND_OFFSET;
+import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_LEFT_BOUND_OFFSET;
+import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_RIGHT_BOUND_OFFSET;
+import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_TOP_BOUND_OFFSET;
 import static com.android.car.ui.utils.RotaryConstants.ROTARY_VERTICALLY_SCROLLABLE;
 
 import static org.mockito.Mockito.any;
@@ -68,8 +68,11 @@ class NodeBuilder {
     /** The class this node comes from. */
     @Nullable
     private String mClassName;
+    /** The node bounds in parent coordinates. */
     @NonNull
+    private Rect mBoundsInParent = new Rect(DEFAULT_BOUNDS);
     /** The node bounds in screen coordinates. */
+    @NonNull
     private Rect mBoundsInScreen = new Rect(DEFAULT_BOUNDS);
     /** Whether this node is focusable. */
     private boolean mFocusable = true;
@@ -79,6 +82,8 @@ class NodeBuilder {
     private boolean mEnabled = true;
     /** Whether the view represented by this node is still in the view tree. */
     private boolean mInViewTree = true;
+    /** Whether this node is scrollable. */
+    private boolean mScrollable = false;
     /** The content description for this node. */
     @Nullable
     private String mContentDescription;
@@ -136,6 +141,11 @@ class NodeBuilder {
 
         doAnswer(invocation -> {
             Object[] args = invocation.getArguments();
+            ((Rect) args[0]).set(builder.mBoundsInParent);
+            return null;
+        }).when(node).getBoundsInParent(any(Rect.class));
+        doAnswer(invocation -> {
+            Object[] args = invocation.getArguments();
             ((Rect) args[0]).set(builder.mBoundsInScreen);
             return null;
         }).when(node).getBoundsInScreen(any(Rect.class));
@@ -144,6 +154,7 @@ class NodeBuilder {
         when(node.isVisibleToUser()).thenReturn(builder.mVisibleToUser);
         when(node.isEnabled()).thenReturn(builder.mEnabled);
         when(node.refresh()).thenReturn(builder.mInViewTree);
+        when(node.isScrollable()).thenReturn(builder.mScrollable);
         when(node.getContentDescription()).thenReturn(builder.mContentDescription);
         when(node.getActionList()).thenReturn(builder.mActionList);
         when(node.getExtras()).thenReturn(builder.mExtras);
@@ -172,6 +183,11 @@ class NodeBuilder {
         return this;
     }
 
+    NodeBuilder setBoundsInParent(@NonNull Rect boundsInParent) {
+        mBoundsInParent = boundsInParent;
+        return this;
+    }
+
     NodeBuilder setBoundsInScreen(@NonNull Rect boundsInScreen) {
         mBoundsInScreen = boundsInScreen;
         return this;
@@ -197,6 +213,11 @@ class NodeBuilder {
         return this;
     }
 
+    NodeBuilder setScrollable(boolean scrollable) {
+        mScrollable = scrollable;
+        return this;
+    }
+
     NodeBuilder setContentDescription(@Nullable String contentDescription) {
         mContentDescription = contentDescription;
         return this;
@@ -211,11 +232,11 @@ class NodeBuilder {
         return setClassName(FOCUS_AREA_CLASS_NAME).setFocusable(false);
     }
 
-    NodeBuilder setFocusAreaHighlightPadding(int left, int top, int right, int bottom) {
-        mExtras.putInt(FOCUS_AREA_HIGHLIGHT_LEFT_PADDING, left);
-        mExtras.putInt(FOCUS_AREA_HIGHLIGHT_TOP_PADDING, top);
-        mExtras.putInt(FOCUS_AREA_HIGHLIGHT_RIGHT_PADDING, right);
-        mExtras.putInt(FOCUS_AREA_HIGHLIGHT_BOTTOM_PADDING, bottom);
+    NodeBuilder setFocusAreaBoundsOffset(int left, int top, int right, int bottom) {
+        mExtras.putInt(FOCUS_AREA_LEFT_BOUND_OFFSET, left);
+        mExtras.putInt(FOCUS_AREA_TOP_BOUND_OFFSET, top);
+        mExtras.putInt(FOCUS_AREA_RIGHT_BOUND_OFFSET, right);
+        mExtras.putInt(FOCUS_AREA_BOTTOM_BOUND_OFFSET, bottom);
         return this;
     }
 
@@ -238,11 +259,13 @@ class NodeBuilder {
         copy.mWindowId = mWindowId;
         copy.mParent = mParent;
         copy.mClassName = mClassName;
+        copy.mBoundsInParent = mBoundsInParent;
         copy.mBoundsInScreen = mBoundsInScreen;
         copy.mFocusable = mFocusable;
         copy.mVisibleToUser = mVisibleToUser;
         copy.mEnabled = mEnabled;
         copy.mInViewTree = mInViewTree;
+        copy.mScrollable = mScrollable;
         copy.mContentDescription = mContentDescription;
         copy.mActionList = mActionList;
         copy.mExtras = mExtras;
@@ -252,11 +275,13 @@ class NodeBuilder {
         mWindowId = UNDEFINED_WINDOW_ID;
         mParent = null;
         mClassName = null;
+        mBoundsInParent = new Rect(DEFAULT_BOUNDS);
         mBoundsInScreen = new Rect(DEFAULT_BOUNDS);
         mFocusable = true;
         mVisibleToUser = true;
         mEnabled = true;
         mInViewTree = true;
+        mScrollable = false;
         mContentDescription = null;
         mActionList = new ArrayList<>();
         mExtras = new Bundle();

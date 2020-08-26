@@ -18,6 +18,8 @@ package com.android.car.rotary;
 import static android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS;
 import static android.provider.Settings.Secure.DEFAULT_INPUT_METHOD;
 import static android.view.Display.DEFAULT_DISPLAY;
+import static android.view.KeyEvent.ACTION_DOWN;
+import static android.view.KeyEvent.ACTION_UP;
 import static android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
 import static android.view.WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
@@ -30,10 +32,12 @@ import static android.view.accessibility.AccessibilityEvent.TYPE_WINDOWS_CHANGED
 import static android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
 import static android.view.accessibility.AccessibilityEvent.WINDOWS_CHANGE_ADDED;
 import static android.view.accessibility.AccessibilityEvent.WINDOWS_CHANGE_REMOVED;
+import static android.view.accessibility.AccessibilityNodeInfo.ACTION_CLEAR_SELECTION;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_DISMISS;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK;
+import static android.view.accessibility.AccessibilityNodeInfo.ACTION_SELECT;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
@@ -47,6 +51,7 @@ import android.car.input.CarInputManager;
 import android.car.input.RotaryEvent;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.graphics.PixelFormat;
@@ -57,6 +62,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.UserManager;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.Display;
@@ -112,17 +118,14 @@ import java.util.Map;
 public class RotaryService extends AccessibilityService implements
         CarInputManager.CarInputCaptureCallback {
 
-    /*
-     * Whether to treat the application window as system window for direct manipulation mode. Set it
-     * to {@code true} for testing only.
-     */
-    private static final boolean TREAT_APP_WINDOW_AS_SYSTEM_WINDOW = false;
-
     /**
      * How many detents to rotate when the user holds in shift while pressing C, V, Q, or E on a
      * debug build.
      */
     private static final int SHIFT_DETENTS = 10;
+
+    private static final String SHARED_PREFS = "com.android.car.rotary.RotaryService";
+    private static final String TOUCH_INPUT_METHOD_PREFIX = "TOUCH_INPUT_METHOD_";
 
     @NonNull
     private NodeCopier mNodeCopier = new NodeCopier();
@@ -216,12 +219,14 @@ public class RotaryService extends AccessibilityService implements
     /** Component name of rotary IME. Empty if none. */
     private String mRotaryInputMethod;
 
-    /** Component name of IME used in touch mode. Null until first observed. */
-    @Nullable
+    /** Component name of IME used in touch mode. */
     private String mTouchInputMethod;
 
     /** Observer to update {@link #mTouchInputMethod} when the user switches IMEs. */
     private ContentObserver mInputMethodObserver;
+
+    private SharedPreferences mPrefs;
+    private UserManager mUserManager;
 
     /**
      * Possible actions to do after receiving {@link AccessibilityEvent#TYPE_VIEW_SCROLLED}.
@@ -376,6 +381,11 @@ public class RotaryService extends AccessibilityService implements
                 hunRight,
                 showHunOnBottom);
 
+        mPrefs = getSharedPreferences(SHARED_PREFS, Context.MODE_PRIVATE);
+        mUserManager = getSystemService(UserManager.class);
+        mTouchInputMethod = mPrefs.getString(
+                TOUCH_INPUT_METHOD_PREFIX + mUserManager.getUserName(),
+                res.getString(R.string.default_touch_input_method));
         mRotaryInputMethod = res.getString(R.string.rotary_input_method);
 
         long afterFocusTimeoutMs = res.getInteger(R.integer.after_focus_timeout_ms);
@@ -616,12 +626,16 @@ public class RotaryService extends AccessibilityService implements
             @Override
             public void onChange(boolean selfChange) {
                 // Either the user switched input methods or we did. In the former case, update
-                // mTouchInputMethod so we can switch back after switching to the rotary input
-                // method.
+                // mTouchInputMethod and save it so we can switch back after switching to the rotary
+                // input method.
                 String inputMethod =
                         Settings.Secure.getString(contentResolver, DEFAULT_INPUT_METHOD);
                 if (inputMethod != null && !inputMethod.equals(mRotaryInputMethod)) {
                     mTouchInputMethod = inputMethod;
+                    String userName = mUserManager.getUserName();
+                    mPrefs.edit()
+                            .putString(TOUCH_INPUT_METHOD_PREFIX + userName, mTouchInputMethod)
+                            .apply();
                 }
             }
         };
@@ -654,7 +668,7 @@ public class RotaryService extends AccessibilityService implements
      */
     private boolean handleKeyEvent(KeyEvent event) {
         int action = event.getAction();
-        boolean isActionDown = action == KeyEvent.ACTION_DOWN;
+        boolean isActionDown = action == ACTION_DOWN;
         int keyCode = getKeyCode(event);
         int detents = event.isShiftPressed() ? SHIFT_DETENTS : 1;
         switch (keyCode) {
@@ -1011,30 +1025,38 @@ public class RotaryService extends AccessibilityService implements
         if (initFocus()) {
             return;
         }
-        // Case 1: the focus is in application window, inject KeyEvent.KEYCODE_DPAD_CENTER event and
-        // the application will handle it.
-        if (isInApplicationWindow(mFocusedNode)) {
-            injectKeyEvent(KeyEvent.KEYCODE_DPAD_CENTER, action);
-            setIgnoreViewClickedNode(mFocusedNode);
-            return;
-        }
-        // We're done with ACTION_DOWN event.
-        if (action == KeyEvent.ACTION_DOWN) {
-            return;
-        }
-
-        // Case 2: the focus is not in application window (e.g., in system window) and the focused
-        // node supports direct manipulation, enter direct manipulation mode.
-        if (DirectManipulationHelper.supportDirectManipulation(mFocusedNode)) {
+        // Case 1: the focused node supports rotate directly. We should ignore ACTION_DOWN event,
+        // and enter direct manipulation mode on ACTION_UP event.
+        if (DirectManipulationHelper.supportRotateDirectly(mFocusedNode)) {
+            if (action == ACTION_DOWN) {
+                return;
+            }
             if (!mInDirectManipulationMode) {
                 mInDirectManipulationMode = true;
+                boolean result = mFocusedNode.performAction(ACTION_SELECT);
+                if (!result) {
+                    L.w("Failed to perform ACTION_SELECT on " + mFocusedNode);
+                }
                 L.d("Enter direct manipulation mode because focused node is clicked.");
             }
             return;
         }
 
-        // Case 3: the focus is not in application window and the focused node doesn't support
-        // direct manipulation, perform click or long click on the focused node.
+        // Case 2: the focused node doesn't support rotate directly and it's in application window.
+        // We should inject KEYCODE_DPAD_CENTER event, then the application will handle the injected
+        // event.
+        if (isInApplicationWindow(mFocusedNode)) {
+            injectKeyEvent(KeyEvent.KEYCODE_DPAD_CENTER, action);
+            setIgnoreViewClickedNode(mFocusedNode);
+            return;
+        }
+
+        // Case 3: the focus node doesn't support rotate directly and it's not in application window
+        // (e.g., in system window). We should ignore ACTION_DOWN event, and click or long click
+        // the focused node on ACTION_UP event.
+        if (action == ACTION_DOWN) {
+            return;
+        }
         boolean result = mFocusedNode.performAction(longClick ? ACTION_LONG_CLICK : ACTION_CLICK);
         if (!result) {
             L.w("Failed to perform " + (longClick ? "ACTION_LONG_CLICK" : "ACTION_CLICK")
@@ -1055,17 +1077,17 @@ public class RotaryService extends AccessibilityService implements
 
         // If the focused node is in direct manipulation mode, manipulate it directly.
         if (mInDirectManipulationMode) {
-            if (isInApplicationWindow(mFocusedNode)) {
-                injectKeyEventForDirection(direction, action);
+            if (DirectManipulationHelper.supportRotateDirectly(mFocusedNode)) {
+                L.d("Ignore nudge events because we're in DM mode and the focused node only "
+                        + "supports rotate directly");
             } else {
-                L.d("Ignore nudge events because we're in DM mode and the focus is not in"
-                        + " application window");
+                injectKeyEventForDirection(direction, action);
             }
             return;
         }
 
         // We're done with ACTION_UP event.
-        if (action == KeyEvent.ACTION_UP) {
+        if (action == ACTION_UP) {
             return;
         }
 
@@ -1127,7 +1149,9 @@ public class RotaryService extends AccessibilityService implements
 
         // If the focused node is in direct manipulation mode, manipulate it directly.
         if (mInDirectManipulationMode) {
-            if (isInApplicationWindow(mFocusedNode)) {
+            if (DirectManipulationHelper.supportRotateDirectly(mFocusedNode)) {
+                performScrollAction(mFocusedNode, clockwise);
+            } else {
                 AccessibilityWindowInfo window = mFocusedNode.getWindow();
                 if (window == null) {
                     L.w("Failed to get window of " + mFocusedNode);
@@ -1138,8 +1162,6 @@ public class RotaryService extends AccessibilityService implements
                 // TODO(b/155823126): Add config to let OEMs determine the mapping.
                 injectMotionEvent(displayId, MotionEvent.AXIS_SCROLL,
                         clockwise ? rotationCount : -rotationCount);
-            } else {
-                performScrollAction(mFocusedNode, clockwise);
             }
             return;
         }
@@ -1177,15 +1199,22 @@ public class RotaryService extends AccessibilityService implements
         if (!isValidAction(action)) {
             return;
         }
-
-        // If the focus is in application window, inject Back button event and the application will
-        // handle it. If the focus is not in application window, exit direct manipulation mode on
-        // key up.
-        if (isInApplicationWindow(mFocusedNode)) {
+        // If the focused node doesn't support rotate directly, inject Back button event, then the
+        // application will handle the injected event.
+        if (!DirectManipulationHelper.supportRotateDirectly(mFocusedNode)) {
             injectKeyEvent(KeyEvent.KEYCODE_BACK, action);
-        } else if (action == KeyEvent.ACTION_UP) {
-            L.d("Exit direct manipulation mode on back button event");
-            mInDirectManipulationMode = false;
+            return;
+        }
+
+        // Otherwise exit direct manipulation mode on ACTION_UP event.
+        if (action == ACTION_DOWN) {
+            return;
+        }
+        L.d("Exit direct manipulation mode on back button event");
+        mInDirectManipulationMode = false;
+        boolean result = mFocusedNode.performAction(ACTION_CLEAR_SELECTION);
+        if (!result) {
+            L.w("Failed to perform ACTION_CLEAR_SELECTION on " + mFocusedNode);
         }
     }
 
@@ -1201,7 +1230,7 @@ public class RotaryService extends AccessibilityService implements
     }
 
     private static boolean isValidAction(int action) {
-        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
+        if (action != ACTION_DOWN && action != ACTION_UP) {
             L.w("Invalid action " + action);
             return false;
         }
@@ -1226,9 +1255,6 @@ public class RotaryService extends AccessibilityService implements
 
     /** Returns whether the given {@code node} is in the application window. */
     private static boolean isInApplicationWindow(@NonNull AccessibilityNodeInfo node) {
-        if (TREAT_APP_WINDOW_AS_SYSTEM_WINDOW) {
-            return false;
-        }
         AccessibilityWindowInfo window = node.getWindow();
         if (window == null) {
             L.w("Failed to get window of " + node);
@@ -1736,10 +1762,6 @@ public class RotaryService extends AccessibilityService implements
         }
         if (!inRotaryMode) {
             setEditNode(null);
-        }
-        if (!inRotaryMode && mTouchInputMethod == null) {
-            L.w("Touch IME not observed");
-            return;
         }
         // Switch to the rotary IME or the IME in use before we switched to the rotary IME.
         String newIme = inRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
