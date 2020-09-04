@@ -34,7 +34,6 @@ import static android.view.accessibility.AccessibilityEvent.WINDOWS_CHANGE_ADDED
 import static android.view.accessibility.AccessibilityEvent.WINDOWS_CHANGE_REMOVED;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_CLEAR_SELECTION;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK;
-import static android.view.accessibility.AccessibilityNodeInfo.ACTION_DISMISS;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK;
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_SELECT;
@@ -43,6 +42,11 @@ import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityActi
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 import static android.view.accessibility.AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+
+import static com.android.car.ui.utils.RotaryConstants.ACTION_HIDE_IME;
+import static com.android.car.ui.utils.RotaryConstants.ACTION_NUDGE_SHORTCUT;
+import static com.android.car.ui.utils.RotaryConstants.ACTION_RESTORE_DEFAULT_FOCUS;
+import static com.android.car.ui.utils.RotaryConstants.NUDGE_SHORTCUT_DIRECTION;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
@@ -1043,10 +1047,13 @@ public class RotaryService extends AccessibilityService implements
         }
 
         // Case 2: the focused node doesn't support rotate directly and it's in application window.
-        // We should inject KEYCODE_DPAD_CENTER event, then the application will handle the injected
-        // event.
+        // We should inject KEYCODE_DPAD_CENTER event (or KEYCODE_ENTER in a WebView), then the
+        // application will handle the injected event.
         if (isInApplicationWindow(mFocusedNode)) {
-            injectKeyEvent(KeyEvent.KEYCODE_DPAD_CENTER, action);
+            int keyCode = mNavigator.isInWebView(mFocusedNode)
+                    ? KeyEvent.KEYCODE_ENTER
+                    : KeyEvent.KEYCODE_DPAD_CENTER;
+            injectKeyEvent(keyCode, action);
             setIgnoreViewClickedNode(mFocusedNode);
             return;
         }
@@ -1091,7 +1098,22 @@ public class RotaryService extends AccessibilityService implements
             return;
         }
 
-        // If the focused node is not in direct manipulation mode, move the focus.
+        // If the focused node is not in direct manipulation mode, try to move the focus to the
+        // shortcut node.
+        if (mFocusArea != null) {
+            Bundle arguments = new Bundle();
+            arguments.putInt(NUDGE_SHORTCUT_DIRECTION, direction);
+            if (mFocusArea.performAction(ACTION_NUDGE_SHORTCUT, arguments)) {
+                // If the user is nudging out of the IME to the node being edited, we no longer need
+                // to keep track of the node being edited.
+                if (mEditNode != null && mEditNode.isFocused()) {
+                    setEditNode(null);
+                }
+                return;
+            }
+        }
+
+        // No shortcut node, so move the focus in the given direction.
         // TODO(b/152438801): sometimes getWindows() takes 10s after boot.
         List<AccessibilityWindowInfo> windows = getWindows();
         mEditNode = Utils.refreshNode(mEditNode);
@@ -1439,7 +1461,15 @@ public class RotaryService extends AccessibilityService implements
         refreshSavedNodes();
         setInRotaryMode(true);
         if (mFocusedNode != null) {
+            // If mFocusedNode is focused, we're in a good state and can proceed with whatever
+            // action the user requested.
             if (mFocusedNode.isFocused()) {
+                return false;
+            }
+            // If the focused node represents an HTML element in a WebView, we just assume the focus
+            // is already initialized here, and we'll handle it properly when the user uses the
+            // controller next time.
+            if (mNavigator.isInWebView(mFocusedNode)) {
                 return false;
             }
             // mFocusedNode is still in the view tree, but its state has changed and it's not
@@ -1676,12 +1706,12 @@ public class RotaryService extends AccessibilityService implements
         Utils.recycleWindow(nextWindow);
 
         // To close the IME, we'll ask the FocusParkingView in the previous window to perform
-        // ACTION_COLLAPSE.
+        // ACTION_HIDE_IME.
         AccessibilityNodeInfo focusParkingView = findFocusParkingView(mFocusedNode);
         if (focusParkingView == null) {
             return;
         }
-        if (!focusParkingView.performAction(AccessibilityNodeInfo.ACTION_COLLAPSE)) {
+        if (!focusParkingView.performAction(ACTION_HIDE_IME)) {
             L.w("Failed to close IME");
         }
         focusParkingView.recycle();
@@ -1817,7 +1847,8 @@ public class RotaryService extends AccessibilityService implements
             L.d("No need to focus on targetNode because it's already focused: " + targetNode);
             return true;
         }
-        if (targetNode.isFocused()) {
+        boolean isInWebView = mNavigator.isInWebView(targetNode);
+        if (targetNode.isFocused() && !isInWebView) {
             // This happens when:
             // 1. A window has no FocusParkingView, thus leaving the window won't clear the view
             //    focus in it. When going back to the window, we may find that the targetNode is
@@ -1832,6 +1863,8 @@ public class RotaryService extends AccessibilityService implements
             //    nearby and try to focus it. The view we found might be the focusedByDefault view,
             //    which was already focused by Android. This is fine, and we just need to update
             //    mFocusedNode.
+            // If the target node is in a WebView, it may not actually be focused. In this case, we
+            // go ahead and perform ACTION_FOCUS to focus it.
             L.w("The focus on targetNode might not be cleared: " + targetNode);
             setFocusedNode(targetNode);
             return true;
@@ -1841,15 +1874,17 @@ public class RotaryService extends AccessibilityService implements
                     + "waiting for the focus event: " + targetNode);
             return false;
         }
-        if (!Utils.isFocusArea(targetNode) && Utils.hasFocus(targetNode)) {
+        if (!Utils.isFocusArea(targetNode) && Utils.hasFocus(targetNode) && !isInWebView) {
             // One of targetNode's descendants is already focused, so we can't perform ACTION_FOCUS
             // on targetNode directly unless it's a FocusArea. The workaround is to clear the focus
-            // first (by focusing on the FocusParkingView), then focus on targetNode.
+            // first (by focusing on the FocusParkingView), then focus on targetNode. The
+            // prohibition on focusing a node that has focus doesn't apply in WebViews.
             L.d("One of targetNode's descendants is already focused: " + targetNode);
             if (!clearFocusInCurrentWindow()) {
                 return false;
             }
         }
+
         // Now we can perform ACTION_FOCUS on targetNode since it doesn't have focus, its
         // descendant's focus has been cleared, or it's a FocusArea.
         boolean result = targetNode.performAction(ACTION_FOCUS, arguments);
@@ -1950,7 +1985,7 @@ public class RotaryService extends AccessibilityService implements
             return;
         }
 
-        if (fpv.performAction(ACTION_DISMISS)) {
+        if (fpv.performAction(ACTION_RESTORE_DEFAULT_FOCUS)) {
             L.d("Move focus to the default focus in the window");
             return;
         }
