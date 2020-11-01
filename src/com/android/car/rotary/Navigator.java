@@ -78,13 +78,7 @@ class Navigator {
         }
 
         // Find the HUN window, if any.
-        AccessibilityWindowInfo hunWindow = null;
-        for (AccessibilityWindowInfo window : windows) {
-            if (isHunWindow(window)) {
-                hunWindow = window;
-                break;
-            }
-        }
+        AccessibilityWindowInfo hunWindow = findHunWindow(windows);
         if (hunWindow == null) {
             return null;
         }
@@ -101,6 +95,16 @@ class Navigator {
         }
         Utils.recycleNodes(hunFocusAreas);
         return targetFocusArea;
+    }
+
+    @Nullable
+    AccessibilityWindowInfo findHunWindow(@NonNull List<AccessibilityWindowInfo> windows) {
+        for (AccessibilityWindowInfo window : windows) {
+            if (isHunWindow(window)) {
+                return window;
+            }
+        }
+        return null;
     }
 
     /**
@@ -162,8 +166,7 @@ class Navigator {
                 //    we want to focus on container and scroll it, we won't skip the container.
                 if (!Utils.canPerformFocus(nextCandidate)
                         || (Utils.isScrollableContainer(nextCandidate)
-                            && (!nextCandidate.isScrollable()
-                                || Utils.descendantCanTakeFocus(nextCandidate)))) {
+                            && !Utils.canScrollableContainerTakeFocus(nextCandidate))) {
                     Utils.recycleNode(candidate);
                     Utils.recycleNode(candidateFocusArea);
                     candidate = nextCandidate;
