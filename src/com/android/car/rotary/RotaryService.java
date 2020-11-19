@@ -23,6 +23,7 @@ import static android.view.KeyEvent.ACTION_DOWN;
 import static android.view.KeyEvent.ACTION_UP;
 import static android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
 import static android.view.WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
+import static android.view.WindowManager.LayoutParams.PRIVATE_FLAG_TRUSTED_OVERLAY;
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
 import static android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED;
 import static android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED;
@@ -611,6 +612,7 @@ public class RotaryService extends AccessibilityService implements
                 FLAG_NOT_FOCUSABLE | FLAG_WATCH_OUTSIDE_TOUCH,
                 PixelFormat.TRANSPARENT);
         windowLayoutParams.gravity = Gravity.RIGHT | Gravity.TOP;
+        windowLayoutParams.privateFlags |= PRIVATE_FLAG_TRUSTED_OVERLAY;
         WindowManager windowManager = getSystemService(WindowManager.class);
         windowManager.addView(frameLayout, windowLayoutParams);
     }
@@ -1141,16 +1143,10 @@ public class RotaryService extends AccessibilityService implements
 
     private boolean nudgeTo(@NonNull List<AccessibilityWindowInfo> windows, int direction) {
         // If the HUN is in the nudge direction, nudge to it.
-        AccessibilityNodeInfo hunFocusArea =
-                mNavigator.findHunFocusArea(windows, mFocusedNode, direction);
-        boolean success;
-        if (hunFocusArea != null) {
-            success = performFocusAction(hunFocusArea);
-            L.d(success ? "Nudge to HUN" : " Failed to nudge to HUN " + hunFocusArea);
-            hunFocusArea.recycle();
-            if (success) {
-                return true;
-            }
+        boolean hunFocusResult = focusHunsWindow(windows, direction);
+        if (hunFocusResult) {
+            L.d("Nudge to HUN successful");
+            return true;
         }
 
         // Try to move the focus to the shortcut node.
@@ -1195,7 +1191,7 @@ public class RotaryService extends AccessibilityService implements
         if (Utils.isFocusArea(targetFocusArea)) {
             arguments.clear();
             arguments.putInt(NUDGE_DIRECTION, direction);
-            success = performFocusAction(targetFocusArea, arguments);
+            boolean success = performFocusAction(targetFocusArea, arguments);
             L.d("Nudging to the nearest FocusArea "
                     + (success ? "succeeded" : "failed: " + targetFocusArea));
             targetFocusArea.recycle();
@@ -1204,7 +1200,7 @@ public class RotaryService extends AccessibilityService implements
 
         // targetFocusArea is an implicit FocusArea (i.e., the root node of a window without any
         // FocusAreas), so restore the focus in it.
-        success = restoreDefaultFocus(targetFocusArea);
+        boolean success = restoreDefaultFocus(targetFocusArea);
         L.d("Nudging to the nearest implicit focus area "
                 + (success ? "succeeded" : "failed: " + targetFocusArea));
         targetFocusArea.recycle();
