@@ -366,13 +366,25 @@ class Navigator {
      * HUN appears at the top or bottom of the screen and on the height of the notification being
      * displayed so they aren't used.
      */
-    boolean isHunWindow(@NonNull AccessibilityWindowInfo window) {
-        if (window.getType() != AccessibilityWindowInfo.TYPE_SYSTEM) {
+    boolean isHunWindow(@Nullable AccessibilityWindowInfo window) {
+        if (window == null || window.getType() != AccessibilityWindowInfo.TYPE_SYSTEM) {
             return false;
         }
         Rect bounds = new Rect();
         window.getBoundsInScreen(bounds);
         return bounds.left == mHunLeft && bounds.right == mHunRight;
+    }
+
+    /**
+     * Returns whether the {@code window} is the main application window. A main application
+     * window is an application window on the default display that takes up the entire display.
+     */
+    boolean isMainApplicationWindow(@NonNull AccessibilityWindowInfo window) {
+        Rect windowBounds = new Rect();
+        window.getBoundsInScreen(windowBounds);
+        return window.getType() == TYPE_APPLICATION
+                && window.getDisplayId() == Display.DEFAULT_DISPLAY
+                && mAppWindowBounds.equals(windowBounds);
     }
 
     /**
