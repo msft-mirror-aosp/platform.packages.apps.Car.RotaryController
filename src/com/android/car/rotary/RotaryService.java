@@ -276,7 +276,8 @@ public class RotaryService extends AccessibilityService implements
     /**
      * The last clicked node by touching the screen, if any were clicked since we last navigated.
      */
-    private AccessibilityNodeInfo mLastTouchedNode = null;
+    @VisibleForTesting
+    AccessibilityNodeInfo mLastTouchedNode = null;
 
     /**
      * How many milliseconds to ignore {@link AccessibilityEvent#TYPE_VIEW_CLICKED} events after
@@ -383,7 +384,8 @@ public class RotaryService extends AccessibilityService implements
     private long mAfterScrollActionUntil;
 
     /** Whether we're in rotary mode (vs touch mode). */
-    private boolean mInRotaryMode;
+    @VisibleForTesting
+    boolean mInRotaryMode;
 
     /**
      * Whether we're in direct manipulation mode.
@@ -392,7 +394,8 @@ public class RotaryService extends AccessibilityService implements
      * this mode is controlled by the client app, which is responsible for updating the mode by
      * calling {@link DirectManipulationHelper#enableDirectManipulationMode} when needed.
      */
-    private boolean mInDirectManipulationMode;
+    @VisibleForTesting
+    boolean mInDirectManipulationMode;
 
     /** The {@link SystemClock#uptimeMillis} when the last rotary rotation event occurred. */
     private long mLastRotateEventTime;
@@ -519,8 +522,9 @@ public class RotaryService extends AccessibilityService implements
     private InputManager mInputManager;
 
     /** Component name of foreground activity. */
+    @VisibleForTesting
     @Nullable
-    private ComponentName mForegroundActivity;
+    ComponentName mForegroundActivity;
 
     private WindowManager mWindowManager;
 
@@ -1737,7 +1741,8 @@ public class RotaryService extends AccessibilityService implements
     }
 
     /** Returns whether the given {@code node} is in the application window. */
-    private static boolean isInApplicationWindow(@NonNull AccessibilityNodeInfo node) {
+    @VisibleForTesting
+    boolean isInApplicationWindow(@NonNull AccessibilityNodeInfo node) {
         AccessibilityWindowInfo window = node.getWindow();
         if (window == null) {
             L.w("Failed to get window of " + node);
