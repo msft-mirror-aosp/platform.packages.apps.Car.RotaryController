@@ -1293,6 +1293,192 @@ public class RotaryServiceTest {
      *      =                                =    =                                 =
      *      ==================================    ===================================
      *
+     *      ==============focus area 3==============
+     *      =                                      =
+     *      =  ...................                 =
+     *      =  .     WebView     .  .............  =
+     *      =  .  .............  .  .           .  =
+     *      =  .  .app button3.  .  .  default  .  =
+     *      =  .  . (focused) .  .  .   focus   .  =
+     *      =  .  .............  .  .............  =
+     *      =  ...................                 =
+     *      =                                      =
+     *      ========================================
+     * </pre>
+     */
+    @Test
+    public void testOnKeyEvents_centerButtonClickInAppWindow_webViewFocused_injectEnterKeyEvent() {
+        initActivity(R.layout.rotary_service_test_2_activity);
+
+        AccessibilityNodeInfo appRoot = createNode("app_root");
+        AccessibilityWindowInfo appWindow = new WindowBuilder()
+                .setRoot(appRoot)
+                .setType(TYPE_APPLICATION)
+                .build();
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(appWindow);
+        when(mRotaryService.getWindows()).thenReturn(windows);
+        when(mRotaryService.getRootInActiveWindow())
+                .thenReturn(MockNodeCopierProvider.get().copy(mWindowRoot));
+
+        AccessibilityNodeInfo mockWebViewParent = mNodeBuilder
+                .setClassName(Utils.WEB_VIEW_CLASS_NAME)
+                .setWindow(appWindow)
+                .build();
+
+        AccessibilityNodeInfo mockAppButton3Node = mNodeBuilder
+                .setFocused(true)
+                .setParent(mockWebViewParent)
+                .setWindow(appWindow)
+                .build();
+        mRotaryService.setFocusedNode(mockAppButton3Node);
+
+        assertThat(mRotaryService.mIgnoreViewClickedNode).isNull();
+
+        // Click the center button of the controller.
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
+        KeyEvent centerButtonEventActionDown =
+                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionDown));
+        KeyEvent centerButtonEventActionUp =
+                new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionUp));
+
+        // RotaryService should inject KEYCODE_ENTER event because mockAppButton3Node is in
+        // the application window, its parent is a WebView, and it is not checkable.
+        verify(mRotaryService, times(1))
+                .injectKeyEvent(KeyEvent.KEYCODE_ENTER, KeyEvent.ACTION_DOWN);
+        verify(mRotaryService, times(1))
+                .injectKeyEvent(KeyEvent.KEYCODE_ENTER, KeyEvent.ACTION_UP);
+        assertThat(mRotaryService.mIgnoreViewClickedNode).isEqualTo(mockAppButton3Node);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(mockAppButton3Node);
+    }
+
+    /**
+     * Tests {@link RotaryService#onKeyEvents} in the following view tree:
+     * <pre>
+     *      The HUN window:
+     *
+     *      hun FocusParkingView
+     *      ==========HUN focus area==========
+     *      =                                =
+     *      =  .............  .............  =
+     *      =  .           .  .           .  =
+     *      =  .hun button1.  .hun button2.  =
+     *      =  .           .  .           .  =
+     *      =  .............  .............  =
+     *      =                                =
+     *      ==================================
+     *
+     *      The app window:
+     *
+     *      app FocusParkingView
+     *      ===========focus area 1===========    ============focus area 2===========
+     *      =                                =    =                                 =
+     *      =  .............  .............  =    =  .............                  =
+     *      =  .           .  .           .  =    =  .           .                  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
+     *      =  .           .  .  shortcut .  =    =  .           .                  =
+     *      =  .............  .............  =    =  .............                  =
+     *      =                                =    =                                 =
+     *      ==================================    ===================================
+     *
+     *      ==============focus area 3==============
+     *      =                                      =
+     *      =  ...................                 =
+     *      =  .     WebView     .  .............  =
+     *      =  .  .............  .  .           .  =
+     *      =  .  .app button3.  .  .  default  .  =
+     *      =  .  . (focused) .  .  .   focus   .  =
+     *      =  .  .............  .  .............  =
+     *      =  ...................                 =
+     *      =                                      =
+     *      ========================================
+     * </pre>
+     */
+    @Test
+    public void
+    testOnKeyEvents_centerButtonClickInAppWindow_webViewFocused_isCheckable_injectSpaceKeyEvent() {
+        initActivity(R.layout.rotary_service_test_2_activity);
+
+        AccessibilityNodeInfo appRoot = createNode("app_root");
+        AccessibilityWindowInfo appWindow = new WindowBuilder()
+                .setRoot(appRoot)
+                .setType(TYPE_APPLICATION)
+                .build();
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(appWindow);
+        when(mRotaryService.getWindows()).thenReturn(windows);
+        when(mRotaryService.getRootInActiveWindow())
+                .thenReturn(MockNodeCopierProvider.get().copy(mWindowRoot));
+
+        AccessibilityNodeInfo mockWebViewParent = mNodeBuilder
+            .setClassName(Utils.WEB_VIEW_CLASS_NAME)
+            .setWindow(appWindow)
+            .build();
+
+        AccessibilityNodeInfo mockAppButton3Node = mNodeBuilder
+                .setFocused(true)
+                .setCheckable(true)
+                .setParent(mockWebViewParent)
+                .setWindow(appWindow)
+                .build();
+        mRotaryService.setFocusedNode(mockAppButton3Node);
+
+        assertThat(mRotaryService.mIgnoreViewClickedNode).isNull();
+
+        // Click the center button of the controller.
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
+        KeyEvent centerButtonEventActionDown =
+                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionDown));
+        KeyEvent centerButtonEventActionUp =
+                new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionUp));
+
+        // RotaryService should inject KEYCODE_SPACE event because mockAppButton3Node is in
+        // the application window, its parent is a WebView, and it is checkable.
+        verify(mRotaryService, times(1))
+                .injectKeyEvent(KeyEvent.KEYCODE_SPACE, KeyEvent.ACTION_DOWN);
+        verify(mRotaryService, times(1))
+                .injectKeyEvent(KeyEvent.KEYCODE_SPACE, KeyEvent.ACTION_UP);
+        assertThat(mRotaryService.mIgnoreViewClickedNode).isEqualTo(mockAppButton3Node);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(mockAppButton3Node);
+    }
+
+    /**
+     * Tests {@link RotaryService#onKeyEvents} in the following view tree:
+     * <pre>
+     *      The HUN window:
+     *
+     *      hun FocusParkingView
+     *      ==========HUN focus area==========
+     *      =                                =
+     *      =  .............  .............  =
+     *      =  .           .  .           .  =
+     *      =  .hun button1.  .hun button2.  =
+     *      =  .           .  .           .  =
+     *      =  .............  .............  =
+     *      =                                =
+     *      ==================================
+     *
+     *      The app window:
+     *
+     *      app FocusParkingView
+     *      ===========focus area 1===========    ============focus area 2===========
+     *      =                                =    =                                 =
+     *      =  .............  .............  =    =  .............                  =
+     *      =  .           .  .           .  =    =  .           .                  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
+     *      =  .           .  .  shortcut .  =    =  .           .                  =
+     *      =  .............  .............  =    =  .............                  =
+     *      =                                =    =                                 =
+     *      ==================================    ===================================
+     *
      *      ===========focus area 3===========
      *      =                                =
      *      =  .............  .............  =

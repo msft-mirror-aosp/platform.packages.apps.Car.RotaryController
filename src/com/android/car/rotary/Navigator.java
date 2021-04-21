@@ -34,10 +34,10 @@ import androidx.annotation.VisibleForTesting;
 
 import com.android.car.ui.FocusArea;
 import com.android.car.ui.FocusParkingView;
+import com.android.internal.util.dump.DualDumpOutputStream;
 
-import java.io.FileDescriptor;
-import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.Predicate;
@@ -67,17 +67,20 @@ class Navigator {
     @NonNull
     private final Rect mAppWindowBounds;
 
+    private final String[] mExcludedOverlayWindowTitles;
+
     Navigator(int displayWidth, int displayHeight, int hunLeft, int hunRight,
-            boolean showHunOnBottom) {
+            boolean showHunOnBottom, String[] excludedOverlayWindowTitles) {
         mHunLeft = hunLeft;
         mHunRight = hunRight;
         mHunNudgeDirection = showHunOnBottom ? View.FOCUS_DOWN : View.FOCUS_UP;
         mAppWindowBounds = new Rect(0, 0, displayWidth, displayHeight);
+        mExcludedOverlayWindowTitles = excludedOverlayWindowTitles;
     }
 
     @VisibleForTesting
     Navigator() {
-        this(0, 0, 0, 0, false);
+        this(0, 0, 0, 0, false, null);
     }
 
     /** Initializes the package name of the host app. */
@@ -481,7 +484,8 @@ class Navigator {
         // for ActivityViews are on virtual displays so they won't be considered overlay windows.
         boolean isSourceWindowOverlayWindow = source.getType() == TYPE_APPLICATION
                 && source.getDisplayId() == Display.DEFAULT_DISPLAY
-                && !mAppWindowBounds.equals(sourceBounds);
+                && !mAppWindowBounds.equals(sourceBounds)
+                && !isOverlayWindowExcluded(source);
         Rect destBounds = new Rect();
         for (AccessibilityWindowInfo window : windows) {
             if (window.equals(source)) {
@@ -499,6 +503,15 @@ class Navigator {
                 results.add(window);
             }
         }
+    }
+
+    private boolean isOverlayWindowExcluded(AccessibilityWindowInfo window) {
+        // TODO(b/185399833): Add an explicit API to check for special windows like TaskView.
+        if (mExcludedOverlayWindowTitles == null) {
+            return false;
+        }
+        String title = window.getTitle().toString();
+        return Arrays.stream(mExcludedOverlayWindowTitles).anyMatch(title::equals);
     }
 
     /**
@@ -896,13 +909,18 @@ class Navigator {
                 });
     }
 
-    void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
-        writer.println("  hunLeft: " + mHunLeft + ", right: " + mHunRight);
-        writer.println("  hunNudgeDirection: " + directionToString(mHunNudgeDirection));
-        writer.println("  appWindowBounds: " + mAppWindowBounds);
-
-        writer.println("  surfaceViewHelper:");
-        mSurfaceViewHelper.dump(fd, writer, args);
+    void dump(@NonNull DualDumpOutputStream dumpOutputStream, boolean dumpAsProto,
+            @NonNull String fieldName, long fieldId) {
+        long fieldToken = dumpOutputStream.start(fieldName, fieldId);
+        dumpOutputStream.write("hunLeft", RotaryProtos.Navigator.HUN_LEFT, mHunLeft);
+        dumpOutputStream.write("hunRight", RotaryProtos.Navigator.HUN_RIGHT, mHunRight);
+        DumpUtils.writeFocusDirection(dumpOutputStream, dumpAsProto, "hunNudgeDirection",
+                RotaryProtos.Navigator.HUN_NUDGE_DIRECTION, mHunNudgeDirection);
+        DumpUtils.writeRect(dumpOutputStream, mAppWindowBounds, "appWindowBounds",
+                RotaryProtos.Navigator.APP_WINDOW_BOUNDS);
+        mSurfaceViewHelper.dump(dumpOutputStream, dumpAsProto, "surfaceViewHelper",
+                RotaryProtos.Navigator.SURFACE_VIEW_HELPER);
+        dumpOutputStream.end(fieldToken);
     }
 
     static String directionToString(@View.FocusRealDirection int direction) {
