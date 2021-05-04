@@ -17,9 +17,11 @@ package com.android.car.rotary;
 
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD;
+import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 
+import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.view.Display;
 import android.view.View;
@@ -33,6 +35,8 @@ import androidx.annotation.VisibleForTesting;
 import com.android.car.ui.FocusArea;
 import com.android.car.ui.FocusParkingView;
 
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -50,6 +54,10 @@ class Navigator {
     @NonNull
     private final TreeTraverser mTreeTraverser = new TreeTraverser();
 
+    @NonNull
+    @VisibleForTesting
+    final SurfaceViewHelper mSurfaceViewHelper = new SurfaceViewHelper();
+
     private final int mHunLeft;
     private final int mHunRight;
 
@@ -65,6 +73,36 @@ class Navigator {
         mHunRight = hunRight;
         mHunNudgeDirection = showHunOnBottom ? View.FOCUS_DOWN : View.FOCUS_UP;
         mAppWindowBounds = new Rect(0, 0, displayWidth, displayHeight);
+    }
+
+    @VisibleForTesting
+    Navigator() {
+        this(0, 0, 0, 0, false);
+    }
+
+    /** Initializes the package name of the host app. */
+    void initHostApp(@NonNull PackageManager packageManager) {
+        mSurfaceViewHelper.initHostApp(packageManager);
+    }
+
+    /** Clears the package name of the host app if the given {@code packageName} matches. */
+    void clearHostApp(@NonNull String packageName) {
+        mSurfaceViewHelper.clearHostApp(packageName);
+    }
+
+    /** Adds the package name of the client app. */
+    void addClientApp(@NonNull CharSequence clientAppPackageName) {
+        mSurfaceViewHelper.addClientApp(clientAppPackageName);
+    }
+
+    /** Returns whether the given {@code node} represents a view of the host app. */
+    boolean isHostNode(@NonNull AccessibilityNodeInfo node) {
+        return mSurfaceViewHelper.isHostNode(node);
+    }
+
+    /** Returns whether the given {@code node} represents a view of the client app. */
+    boolean isClientNode(@NonNull AccessibilityNodeInfo node) {
+        return mSurfaceViewHelper.isClientNode(node);
     }
 
     @Nullable
@@ -184,11 +222,117 @@ class Navigator {
         return target == null ? null : new FindRotateTargetResult(target, advancedCount);
     }
 
-    /** Sets a mock Utils instance for testing. */
+    /** Sets a NodeCopier instance for testing. */
     @VisibleForTesting
     void setNodeCopier(@NonNull NodeCopier nodeCopier) {
         mNodeCopier = nodeCopier;
         mTreeTraverser.setNodeCopier(nodeCopier);
+    }
+
+    /**
+     * Returns the root node in the tree containing {@code node}. The caller is responsible for
+     * recycling the result.
+     */
+    @NonNull
+    AccessibilityNodeInfo getRoot(@NonNull AccessibilityNodeInfo node) {
+        // If the node represents a view in the embedded view hierarchy hosted by a SurfaceView,
+        // return the root node of the hierarchy, which is the only child of the SurfaceView node.
+        if (isHostNode(node)) {
+            AccessibilityNodeInfo child = mNodeCopier.copy(node);
+            AccessibilityNodeInfo parent = node.getParent();
+            while (parent != null && !Utils.isSurfaceView(parent)) {
+                child.recycle();
+                child = parent;
+                parent = child.getParent();
+            }
+            Utils.recycleNode(parent);
+            return child;
+        }
+
+        // Get the root node directly via the window.
+        AccessibilityWindowInfo window = node.getWindow();
+        if (window != null) {
+            AccessibilityNodeInfo root = window.getRoot();
+            window.recycle();
+            if (root != null) {
+                return root;
+            }
+        }
+
+        // If the root node can't be accessed via the window, navigate up the node tree.
+        AccessibilityNodeInfo child = mNodeCopier.copy(node);
+        AccessibilityNodeInfo parent = node.getParent();
+        while (parent != null) {
+            child.recycle();
+            child = parent;
+            parent = child.getParent();
+        }
+        return child;
+    }
+
+    /**
+     * Searches {@code root} and its descendants, and returns the currently focused node if it's
+     * not a {@link FocusParkingView}, or returns null in other cases. The caller is responsible
+     * for recycling the result.
+     */
+    @Nullable
+    AccessibilityNodeInfo findFocusedNodeInRoot(@NonNull AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo focusedNode = findFocusedNodeInRootInternal(root);
+        if (focusedNode != null && Utils.isFocusParkingView(focusedNode)) {
+            focusedNode.recycle();
+            return null;
+        }
+        return focusedNode;
+    }
+
+    /**
+     * Searches {@code root} and its descendants, and returns the currently focused node, if any,
+     * or returns null if not found. The caller is responsible for recycling the result.
+     */
+    @Nullable
+    private AccessibilityNodeInfo findFocusedNodeInRootInternal(
+            @NonNull AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo surfaceView = null;
+        if (!isClientNode(root)) {
+            AccessibilityNodeInfo focusedNode = root.findFocus(FOCUS_INPUT);
+            if (focusedNode != null && Utils.isSurfaceView(focusedNode)) {
+                // The focused node represents a SurfaceView. In this case the root node is actually
+                // a client node but Navigator doesn't know that because SurfaceViewHelper doesn't
+                // know the package name of the client app.
+                // Although the package name of the client app will be stored in SurfaceViewHelper
+                // when RotaryService handles TYPE_WINDOW_STATE_CHANGED event, RotaryService may not
+                // receive the event. For example, RotaryService may have been killed and restarted.
+                // In this case, Navigator should store the package name.
+                surfaceView = focusedNode;
+                addClientApp(surfaceView.getPackageName());
+            } else {
+                return focusedNode;
+            }
+        }
+
+        // The root node is in client app, which contains a SurfaceView to display the embedded
+        // view hierarchy. In this case only search inside the embedded view hierarchy.
+        if (surfaceView == null) {
+            surfaceView = findSurfaceViewInRoot(root);
+        }
+        if (surfaceView == null) {
+            L.w("Failed to find SurfaceView in client app " + root);
+            return null;
+        }
+        if (surfaceView.getChildCount() == 0) {
+            L.d("Host app is not loaded yet");
+            surfaceView.recycle();
+            return null;
+        }
+        AccessibilityNodeInfo embeddedRoot = surfaceView.getChild(0);
+        surfaceView.recycle();
+        if (embeddedRoot == null) {
+            L.w("Failed to get the root of host app");
+            return null;
+        }
+        AccessibilityNodeInfo focusedNode = embeddedRoot.findFocus(FOCUS_INPUT);
+        embeddedRoot.recycle();
+        return focusedNode;
     }
 
     /**
@@ -198,23 +342,34 @@ class Navigator {
      */
     @Nullable
     AccessibilityNodeInfo findFocusParkingView(@NonNull AccessibilityNodeInfo node) {
-        AccessibilityWindowInfo window = node.getWindow();
-        if (window == null) {
-            L.w("Failed to get window for node " + node);
-            return null;
-        }
-        AccessibilityNodeInfo root = window.getRoot();
-        window.recycle();
-        if (root == null) {
-            L.e("No root node that contains " + node);
-            return null;
-        }
-        AccessibilityNodeInfo fpv = mTreeTraverser.depthFirstSearch(
-                root,
-                /* skipPredicate= */ Utils::isFocusArea,
-                /* targetPredicate= */ Utils::isFocusParkingView);
+        AccessibilityNodeInfo root = getRoot(node);
+        AccessibilityNodeInfo fpv = findFocusParkingViewInRoot(root);
         root.recycle();
         return fpv;
+    }
+
+    /**
+     * Searches {@code root} and its descendants, and returns the node representing a {@link
+     * FocusParkingView}, if any, or returns null if not found. The caller is responsible for
+     * recycling the result.
+     */
+    @Nullable
+    AccessibilityNodeInfo findFocusParkingViewInRoot(@NonNull AccessibilityNodeInfo root) {
+        return mTreeTraverser.depthFirstSearch(
+                root,
+                /* skipPredicate= */ Utils::isFocusArea,
+                /* targetPredicate= */ Utils::isFocusParkingView
+        );
+    }
+
+    /**
+     * Searches {@code root} and its descendants, and returns the node representing a {@link
+     * android.view.SurfaceView}, if any, or returns null if not found. The caller is responsible
+     * for recycling the result.
+     */
+    @Nullable
+    AccessibilityNodeInfo findSurfaceViewInRoot(@NonNull AccessibilityNodeInfo root) {
+        return mTreeTraverser.depthFirstSearch(root, /* targetPredicate= */ Utils::isSurfaceView);
     }
 
     /**
@@ -351,11 +506,21 @@ class Navigator {
      * them. If there are no explicitly declared {@link FocusArea}s, returns the root view. The
      * caller is responsible for recycling the result.
      */
-    private @NonNull
+    @NonNull
+    @VisibleForTesting
     List<AccessibilityNodeInfo> findFocusAreas(@NonNull AccessibilityWindowInfo window) {
         List<AccessibilityNodeInfo> results = new ArrayList<>();
         AccessibilityNodeInfo rootNode = window.getRoot();
         if (rootNode != null) {
+            // If the root node is in the client app therefore contains a SurfaceView, skip the view
+            // hierarchy of the client app, and scan the view hierarchy of the host app, which is
+            // embedded in the SurfaceView.
+            if (isClientNode(rootNode)) {
+                AccessibilityNodeInfo hostRoot = getDescendantHostRoot(rootNode);
+                rootNode.recycle();
+                rootNode = hostRoot;
+            }
+
             addFocusAreas(rootNode, results);
             if (results.isEmpty()) {
                 results.add(copyNode(rootNode));
@@ -366,18 +531,39 @@ class Navigator {
     }
 
     /**
+     * Searches from {@code clientNode}, and returns the root of the embedded view hierarchy if any,
+     * or returns null if not found. The caller is responsible for recycling the result.
+     */
+    @Nullable
+    AccessibilityNodeInfo getDescendantHostRoot(@NonNull AccessibilityNodeInfo clientNode) {
+        return mTreeTraverser.depthFirstSearch(clientNode, this::isHostNode);
+    }
+
+    /**
      * Returns whether the given window is the Heads-up Notification (HUN) window. The HUN window
      * is identified by the left and right edges. The top and bottom vary depending on whether the
      * HUN appears at the top or bottom of the screen and on the height of the notification being
      * displayed so they aren't used.
      */
-    boolean isHunWindow(@NonNull AccessibilityWindowInfo window) {
-        if (window.getType() != AccessibilityWindowInfo.TYPE_SYSTEM) {
+    boolean isHunWindow(@Nullable AccessibilityWindowInfo window) {
+        if (window == null || window.getType() != AccessibilityWindowInfo.TYPE_SYSTEM) {
             return false;
         }
         Rect bounds = new Rect();
         window.getBoundsInScreen(bounds);
         return bounds.left == mHunLeft && bounds.right == mHunRight;
+    }
+
+    /**
+     * Returns whether the {@code window} is the main application window. A main application
+     * window is an application window on the default display that takes up the entire display.
+     */
+    boolean isMainApplicationWindow(@NonNull AccessibilityWindowInfo window) {
+        Rect windowBounds = new Rect();
+        window.getBoundsInScreen(windowBounds);
+        return window.getType() == TYPE_APPLICATION
+                && window.getDisplayId() == Display.DEFAULT_DISPLAY
+                && mAppWindowBounds.equals(windowBounds);
     }
 
     /**
@@ -538,6 +724,11 @@ class Navigator {
                     if (isInWebView(candidateNode)) {
                         return Utils.canPerformFocus(candidateNode);
                     }
+                    // If a node isn't visible to the user, e.g. another window is obscuring it,
+                    // skip it.
+                    if (!candidateNode.isVisibleToUser()) {
+                        return false;
+                    }
                     // If a node can't take focus, it represents a focus area, so we return false to
                     // skip the node and let it search its descendants.
                     if (!Utils.canTakeFocus(candidateNode)) {
@@ -559,10 +750,17 @@ class Navigator {
     }
 
     /**
-     * Finds the closest ancestor focus area of the given {@code node}. If the given {@code node}
-     * is a focus area, returns it; if there are no explicitly declared {@link FocusArea}s among the
-     * ancestors of this view, returns the root view. The caller is responsible for recycling the
-     * result.
+     * Returns the closest ancestor focus area of the given {@code node}.
+     * <ul>
+     *     <li> If the given {@code node} is a {@link FocusArea} node or a descendant of a {@link
+     *          FocusArea} node, returns the {@link FocusArea} node.
+     *     <li> If there are no explicitly declared {@link FocusArea}s among the ancestors of this
+     *          view, and this view is not in an embedded view hierarchy, returns the root node.
+     *     <li> If there are no explicitly declared {@link FocusArea}s among the ancestors of this
+     *          view, and this view is in an embedded view hierarchy, returns the root node of
+     *          embedded view hierarchy.
+     * </ul>
+     * The caller is responsible for recycling the result.
      */
     @NonNull
     AccessibilityNodeInfo getAncestorFocusArea(@NonNull AccessibilityNodeInfo node) {
@@ -574,6 +772,11 @@ class Navigator {
             AccessibilityNodeInfo parent = candidateNode.getParent();
             if (parent == null) {
                 // The candidateNode is the root node.
+                return true;
+            }
+            if (Utils.isSurfaceView(parent)) {
+                // Treat the root of embedded view hierarchy (i.e., the only child of the
+                // SurfaceView) as an implicit focus area.
                 return true;
             }
             parent.recycle();
@@ -691,6 +894,30 @@ class Navigator {
                     }
                     return false;
                 });
+    }
+
+    void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
+        writer.println("  hunLeft: " + mHunLeft + ", right: " + mHunRight);
+        writer.println("  hunNudgeDirection: " + directionToString(mHunNudgeDirection));
+        writer.println("  appWindowBounds: " + mAppWindowBounds);
+
+        writer.println("  surfaceViewHelper:");
+        mSurfaceViewHelper.dump(fd, writer, args);
+    }
+
+    static String directionToString(@View.FocusRealDirection int direction) {
+        switch (direction) {
+            case View.FOCUS_UP:
+                return "FOCUS_UP";
+            case View.FOCUS_DOWN:
+                return "FOCUS_DOWN";
+            case View.FOCUS_LEFT:
+                return "FOCUS_LEFT";
+            case View.FOCUS_RIGHT:
+                return "FOCUS_RIGHT";
+            default:
+                return "<unknown direction " + direction + ">";
+        }
     }
 
     /** Result from {@link #findRotateTarget}. */
