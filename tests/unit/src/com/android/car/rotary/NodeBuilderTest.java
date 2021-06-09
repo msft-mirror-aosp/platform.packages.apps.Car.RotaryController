@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2021 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 package com.android.car.rotary;
 
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD;
+import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
 
 import static com.android.car.rotary.Utils.FOCUS_AREA_CLASS_NAME;
 import static com.android.car.rotary.Utils.FOCUS_PARKING_VIEW_CLASS_NAME;
@@ -24,6 +25,7 @@ import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_BOTTOM_BOUND_O
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_LEFT_BOUND_OFFSET;
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_RIGHT_BOUND_OFFSET;
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_TOP_BOUND_OFFSET;
+import static com.android.car.ui.utils.RotaryConstants.ROTARY_CONTAINER;
 import static com.android.car.ui.utils.RotaryConstants.ROTARY_VERTICALLY_SCROLLABLE;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -33,19 +35,20 @@ import android.os.Bundle;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.RobolectricTestRunner;
 
 import java.util.ArrayList;
 
-@RunWith(RobolectricTestRunner.class)
+@RunWith(AndroidJUnit4.class)
 public class NodeBuilderTest {
-
+    private static final String PACKAGE_NAME = "package_name";
     private static final String CLASS_NAME = "class_name";
     private static final String CONTENT_DESCRIPTION = "content_description";
-
+    private static final String STATE_DESCRIPTION = "state_description";
     private NodeBuilder mNodeBuilder;
 
     @Before
@@ -57,6 +60,7 @@ public class NodeBuilderTest {
     public void testBuildDefaultNode() {
         AccessibilityNodeInfo node = mNodeBuilder.build();
         assertThat(node.isFocusable()).isTrue();
+        assertThat(node.isFocused()).isFalse();
         assertThat(node.isVisibleToUser()).isTrue();
         assertThat(node.refresh()).isTrue();
         assertThat(node.isEnabled()).isTrue();
@@ -66,13 +70,20 @@ public class NodeBuilderTest {
         assertThat(boundsInParent.isEmpty()).isFalse();
         Rect boundsInScreen = new Rect();
         node.getBoundsInScreen(boundsInScreen);
-        assertThat(boundsInScreen.isEmpty()).isFalse();
+        assertThat(boundsInScreen).isEqualTo(NodeBuilder.DEFAULT_BOUNDS);
+        assertThat(node.getBoundsInScreen()).isEqualTo(NodeBuilder.DEFAULT_BOUNDS);
     }
 
     @Test
     public void testSetFocusable() {
         AccessibilityNodeInfo node = mNodeBuilder.setFocusable(false).build();
         assertThat(node.isFocusable()).isFalse();
+    }
+
+    @Test
+    public void testSetFocused() {
+        AccessibilityNodeInfo node = mNodeBuilder.setFocused(true).build();
+        assertThat(node.isFocused()).isTrue();
     }
 
     @Test
@@ -86,7 +97,6 @@ public class NodeBuilderTest {
         AccessibilityNodeInfo node = mNodeBuilder.setInViewTree(false).build();
         assertThat(node.refresh()).isFalse();
     }
-
 
     @Test
     public void testSetScrollable() {
@@ -104,7 +114,7 @@ public class NodeBuilderTest {
     public void testSetWindow() {
         AccessibilityWindowInfo window = new WindowBuilder().build();
         AccessibilityNodeInfo node = mNodeBuilder.setWindow(window).build();
-        assertThat(node.getWindow()).isSameAs(window);
+        assertThat(node.getWindow()).isEqualTo(window);
     }
 
     @Test
@@ -126,6 +136,12 @@ public class NodeBuilderTest {
     }
 
     @Test
+    public void testSetPackageName() {
+        AccessibilityNodeInfo node = mNodeBuilder.setPackageName(PACKAGE_NAME).build();
+        assertThat(node.getPackageName().toString()).isEqualTo(PACKAGE_NAME);
+    }
+
+    @Test
     public void testSetClassName() {
         AccessibilityNodeInfo node = mNodeBuilder.setClassName(CLASS_NAME).build();
         assertThat(node.getClassName().toString()).isEqualTo(CLASS_NAME);
@@ -139,16 +155,42 @@ public class NodeBuilderTest {
     }
 
     @Test
+    public void testSetStateDescription() {
+        AccessibilityNodeInfo node =
+                mNodeBuilder.setStateDescription(STATE_DESCRIPTION).build();
+        assertThat(node.getStateDescription().toString()).isEqualTo(STATE_DESCRIPTION);
+    }
+
+    @Test
     public void testSetParent() {
         AccessibilityNodeInfo parent = mNodeBuilder.build();
         AccessibilityNodeInfo child1 = mNodeBuilder.setParent(parent).build();
         AccessibilityNodeInfo child2 = mNodeBuilder.setParent(parent).build();
-
-        assertThat(child1.getParent()).isSameAs(parent);
+        assertThat(child1.getParent()).isEqualTo(parent);
         assertThat(parent.getChildCount()).isEqualTo(2);
-        assertThat(parent.getChild(0)).isSameAs(child1);
-        assertThat(parent.getChild(1)).isSameAs(child2);
+        assertThat(parent.getChild(0)).isEqualTo(child1);
+        assertThat(parent.getChild(1)).isEqualTo(child2);
         assertThat(parent.getChild(2)).isNull();
+    }
+
+    @Test
+    public void testFindInputFocus_succeeded() {
+        AccessibilityNodeInfo root = mNodeBuilder.build();
+        AccessibilityNodeInfo parent1 = mNodeBuilder.setParent(root).build();
+        AccessibilityNodeInfo parent2 = mNodeBuilder.setParent(root).build();
+        AccessibilityNodeInfo child1 = mNodeBuilder.setParent(parent1).build();
+        AccessibilityNodeInfo child2 = mNodeBuilder.setParent(parent1).build();
+        AccessibilityNodeInfo child3 = mNodeBuilder.setParent(parent2).setFocused(true).build();
+        AccessibilityNodeInfo child4 = mNodeBuilder.setParent(parent2).build();
+
+        assertThat(root.findFocus(FOCUS_INPUT)).isEqualTo(child3);
+    }
+
+    @Test
+    public void testFindInputFocus_failed() {
+        AccessibilityNodeInfo parent = mNodeBuilder.build();
+        AccessibilityNodeInfo child = mNodeBuilder.setParent(parent).build();
+        assertThat(parent.findFocus(FOCUS_INPUT)).isNull();
     }
 
     @Test
@@ -196,5 +238,11 @@ public class NodeBuilderTest {
     public void testSetScrollableContainer() {
         AccessibilityNodeInfo node = mNodeBuilder.setScrollableContainer().build();
         assertThat(node.getContentDescription().toString()).isEqualTo(ROTARY_VERTICALLY_SCROLLABLE);
+    }
+
+    @Test
+    public void testSetRotaryContainer() {
+        AccessibilityNodeInfo node = mNodeBuilder.setRotaryContainer().build();
+        assertThat(node.getContentDescription().toString()).isEqualTo(ROTARY_CONTAINER);
     }
 }

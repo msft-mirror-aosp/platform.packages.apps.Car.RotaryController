@@ -16,6 +16,8 @@
 
 package com.android.car.rotary;
 
+import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
+
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_BOTTOM_BOUND_OFFSET;
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_LEFT_BOUND_OFFSET;
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_RIGHT_BOUND_OFFSET;
@@ -26,6 +28,7 @@ import static com.android.car.ui.utils.RotaryConstants.ROTARY_VERTICALLY_SCROLLA
 
 import android.graphics.Rect;
 import android.os.Bundle;
+import android.view.SurfaceView;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.webkit.WebView;
@@ -60,6 +63,8 @@ final class Utils {
             "com.android.car.rotary.FocusParkingView";
 
     private static final String WEB_VIEW_CLASS_NAME = WebView.class.getName();
+    @VisibleForTesting
+    static final String SURFACE_VIEW_CLASS_NAME = SurfaceView.class.getName();
 
     private Utils() {
     }
@@ -68,6 +73,13 @@ final class Utils {
     static void recycleNode(@Nullable AccessibilityNodeInfo node) {
         if (node != null) {
             node.recycle();
+        }
+    }
+
+    /** Recycles all specified nodes. */
+    static void recycleNodes(AccessibilityNodeInfo... nodes) {
+        for (AccessibilityNodeInfo node : nodes) {
+            recycleNode(node);
         }
     }
 
@@ -112,6 +124,12 @@ final class Utils {
 
         // ACTION_FOCUS doesn't work on WebViews.
         if (isWebView(node)) {
+            return false;
+        }
+
+        // SurfaceView in the client app shouldn't be focused by the rotary controller. See
+        // SurfaceViewHelper for more context.
+        if (isSurfaceView(node)) {
             return false;
         }
 
@@ -182,24 +200,18 @@ final class Utils {
     }
 
     /**
-     * Returns whether the given {@code node} has focus (i.e. the node or one of its descendants is
-     * focused).
+     * Searches {@code node} and its descendants for the focused node. Returns whether the focus
+     * was found.
      */
     static boolean hasFocus(@NonNull AccessibilityNodeInfo node) {
-        if (node.isFocused()) {
-            return true;
+        AccessibilityNodeInfo foundFocus = node.findFocus(FOCUS_INPUT);
+        if (foundFocus == null) {
+            L.d("Failed to find focused node in " + node);
+            return false;
         }
-        for (int i = 0; i < node.getChildCount(); i++) {
-            AccessibilityNodeInfo childNode = node.getChild(i);
-            if (childNode != null) {
-                boolean result = hasFocus(childNode);
-                childNode.recycle();
-                if (result) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        L.d("Found focused node " + foundFocus);
+        foundFocus.recycle();
+        return true;
     }
 
     /**
@@ -209,6 +221,7 @@ final class Utils {
     static boolean isFocusParkingView(@NonNull AccessibilityNodeInfo node) {
         return isCarUiFocusParkingView(node) || isGenericFocusParkingView(node);
     }
+
     /** Returns whether the given {@code node} represents a car ui lib {@link FocusParkingView}. */
     static boolean isCarUiFocusParkingView(@NonNull AccessibilityNodeInfo node) {
         CharSequence className = node.getClassName();
@@ -243,6 +256,12 @@ final class Utils {
     static boolean isWebView(@NonNull AccessibilityNodeInfo node) {
         CharSequence className = node.getClassName();
         return className != null && WEB_VIEW_CLASS_NAME.contentEquals(className);
+    }
+
+    /** Returns whether the given {@code node} represents a {@link SurfaceView}. */
+    static boolean isSurfaceView(@NonNull AccessibilityNodeInfo node) {
+        CharSequence className = node.getClassName();
+        return className != null && SURFACE_VIEW_CLASS_NAME.contentEquals(className);
     }
 
     /**
@@ -372,20 +391,5 @@ final class Utils {
             ancestor = nextAncestor;
         }
         return null;
-    }
-
-    /**
-     * Returns the root node in the tree containing {@code node}. Returns null if unable to get
-     * the root node for any reason. The caller is responsible for recycling the result.
-     */
-    @Nullable
-    static AccessibilityNodeInfo getRoot(@NonNull AccessibilityNodeInfo node) {
-        AccessibilityWindowInfo window = node.getWindow();
-        if (window == null) {
-            return null;
-        }
-        AccessibilityNodeInfo root = window.getRoot();
-        window.recycle();
-        return root;
     }
 }
