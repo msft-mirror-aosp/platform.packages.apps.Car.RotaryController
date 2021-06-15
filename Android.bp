@@ -21,12 +21,18 @@ android_app {
     srcs: ["src/**/*.java"],
     resource_dirs: ["res"],
 
+    // This app uses allowlisted privileged permissions.
+    required: ["allowed_privapp_com.android.car.rotary"],
+
     // Because it uses a platform API (CarInputManager).
     platform_apis: true,
 
     // This app should be platform signed because it requires android.permission.MONITOR_INPUT
     // permission, which is of type "signature".
     certificate: "platform",
+
+    // This app uses allowlisted privileged permissions.
+    privileged: true,
 
     optimize: {
         enabled: false,
@@ -45,4 +51,39 @@ android_app {
             enabled: false,
         },
     },
+}
+
+android_library {
+    name: "CarRotaryControllerForUnitTesting",
+
+    manifest: "tests/unit/AndroidManifest.xml",
+
+    srcs: ["src/**/*.java"],
+
+    resource_dirs: [
+        "tests/unit/res",
+        "res",
+    ],
+
+    platform_apis: true,
+
+    optimize: {
+        enabled: false,
+    },
+    dex_preopt: {
+        enabled: false,
+    },
+    libs: [
+        "android.car",
+    ],
+    static_libs: [
+        "car-ui-lib",
+    ],
+    product_variables: {
+        pdk: {
+            enabled: false,
+        },
+    },
+
+    aaptflags: ["--extra-packages com.android.car.rotary"],
 }
