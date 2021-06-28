@@ -13,26 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.android.car.rotary;
 
-import android.view.accessibility.AccessibilityNodeInfo;
+import android.app.Activity;
+import android.os.Bundle;
 
 import androidx.annotation.Nullable;
 
-/** A class that can provide a mock {@link NodeCopier}. */
-class MockNodeCopierProvider {
+/** An activity used for testing {@link com.android.car.rotary.TreeTraverser}. */
+public class TreeTraverserTestActivity extends Activity {
 
-    private static final NodeCopier sNodeCopier = new NodeCopier() {
-        // NodeCopier#copyNode() doesn't work when passed a mock node, so we create the mock method
-        // which returns the passed node itself rather than a copy. As a result, nodes created by
-        // the mock method shouldn't be recycled.
-        @Override
-        AccessibilityNodeInfo copy(@Nullable AccessibilityNodeInfo node) {
-            return node;
-        }
-    };
+    @Override
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
 
-    static NodeCopier get() {
-        return sNodeCopier;
+        setContentView(R.layout.tree_traverser_test_activity);
     }
 }
