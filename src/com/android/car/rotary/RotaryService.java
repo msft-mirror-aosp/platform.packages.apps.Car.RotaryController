@@ -609,11 +609,7 @@ public class RotaryService extends AccessibilityService implements
         mIgnoreViewClickedMs = res.getInteger(R.integer.ignore_view_clicked_ms);
         mAfterScrollTimeoutMs = res.getInteger(R.integer.after_scroll_timeout_ms);
 
-        String[] excludedOverlayWindowTitles =
-                res.getStringArray(R.array.excluded_application_overlay_window_titles);
-
-        mNavigator = new Navigator(displayWidth, displayHeight, hunLeft, hunRight, showHunOnBottom,
-                excludedOverlayWindowTitles);
+        mNavigator = new Navigator(displayWidth, displayHeight, hunLeft, hunRight, showHunOnBottom);
         mNavigator.initHostApp(getPackageManager());
 
         mPrefs = createDeviceProtectedStorageContext().getSharedPreferences(SHARED_PREFS,
@@ -784,8 +780,8 @@ public class RotaryService extends AccessibilityService implements
                     if (window != null) {
                         if (window.getType() == TYPE_APPLICATION
                                 && window.getDisplayId() == DEFAULT_DISPLAY) {
-                            onForegroundActivityChanged(source, event.getPackageName(),
-                                    event.getClassName());
+                            onForegroundActivityChanged(source, window,
+                                    event.getPackageName(), event.getClassName());
                         }
                         window.recycle();
                     }
@@ -1807,6 +1803,7 @@ public class RotaryService extends AccessibilityService implements
     }
 
     private void onForegroundActivityChanged(@NonNull AccessibilityNodeInfo root,
+            @NonNull AccessibilityWindowInfo window,
             CharSequence packageName, CharSequence className) {
         // If the foreground app is a client app, store its package name.
         AccessibilityNodeInfo surfaceView = mNavigator.findSurfaceViewInRoot(root);
@@ -1820,6 +1817,7 @@ public class RotaryService extends AccessibilityService implements
             return;
         }
         mForegroundActivity = newActivity;
+        mNavigator.updateAppWindowTaskId(window);
         if (mInDirectManipulationMode) {
             L.d("Exit direct manipulation mode because the foreground app has changed");
             mInDirectManipulationMode = false;
