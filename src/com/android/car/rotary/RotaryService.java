@@ -16,6 +16,8 @@
 package com.android.car.rotary;
 
 import static android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS;
+import static android.car.CarOccupantZoneManager.DisplayTypeEnum;
+import static android.car.settings.CarSettings.Secure.KEY_ROTARY_KEY_EVENT_FILTER;
 import static android.provider.Settings.Secure.DEFAULT_INPUT_METHOD;
 import static android.provider.Settings.Secure.DISABLED_SYSTEM_INPUT_METHODS;
 import static android.provider.Settings.Secure.ENABLED_INPUT_METHODS;
@@ -25,6 +27,7 @@ import static android.view.KeyEvent.ACTION_UP;
 import static android.view.KeyEvent.KEYCODE_UNKNOWN;
 import static android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
 import static android.view.WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
+import static android.view.WindowManager.LayoutParams.PRIVATE_FLAG_TRUSTED_OVERLAY;
 import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
 import static android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED;
 import static android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED;
@@ -45,6 +48,8 @@ import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityActi
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 
+import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.BOILERPLATE_CODE;
+import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.DUMP_INFO;
 import static com.android.car.ui.utils.RotaryConstants.ACTION_HIDE_IME;
 import static com.android.car.ui.utils.RotaryConstants.ACTION_NUDGE_SHORTCUT;
 import static com.android.car.ui.utils.RotaryConstants.ACTION_NUDGE_TO_ANOTHER_FOCUS_AREA;
@@ -54,6 +59,7 @@ import static com.android.car.ui.utils.RotaryConstants.NUDGE_DIRECTION;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.car.Car;
+import android.car.CarOccupantZoneManager;
 import android.car.input.CarInputManager;
 import android.car.input.RotaryEvent;
 import android.content.BroadcastReceiver;
@@ -80,6 +86,8 @@ import android.os.SystemClock;
 import android.os.UserManager;
 import android.provider.Settings;
 import android.text.TextUtils;
+import android.util.IndentingPrintWriter;
+import android.util.proto.ProtoOutputStream;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.InputDevice;
@@ -97,9 +105,13 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
+import com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport;
 import com.android.car.ui.utils.DirectManipulationHelper;
+import com.android.internal.util.ArrayUtils;
+import com.android.internal.util.dump.DualDumpOutputStream;
 
 import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.PrintWriter;
 import java.lang.ref.WeakReference;
 import java.net.URISyntaxException;
@@ -313,6 +325,9 @@ public class RotaryService extends AccessibilityService implements
     /** Observer to update {@link #mTouchInputMethod} when the user switches IMEs. */
     private ContentObserver mInputMethodObserver;
 
+    /** Observer to update service info when the developer toggles key event filtering. */
+    private ContentObserver mKeyEventFilterObserver;
+
     private SharedPreferences mPrefs;
     private UserManager mUserManager;
 
@@ -355,8 +370,9 @@ public class RotaryService extends AccessibilityService implements
      * Possible actions to do after receiving {@link AccessibilityEvent#TYPE_VIEW_SCROLLED}.
      *
      * @see #injectScrollEvent
+     * TODO(b/185154771): Replace with #IntDef
      */
-    private enum AfterScrollAction {
+    enum AfterScrollAction {
         /** Do nothing. */
         NONE,
         /**
@@ -432,6 +448,11 @@ public class RotaryService extends AccessibilityService implements
      */
     @Nullable private Context mWindowContext;
 
+    /**
+     * Mapping from test keycodes to production keycodes. During development, you can use a USB
+     * keyboard as a stand-in for rotary hardware. To enable this: {@code adb shell settings put
+     * secure android.car.ROTARY_KEY_EVENT_FILTER 1}.
+     */
     private static final Map<Integer, Integer> TEST_TO_REAL_KEYCODE_MAP;
 
     private static final Map<Integer, Integer> DIRECTION_TO_KEYCODE_MAP;
@@ -587,7 +608,11 @@ public class RotaryService extends AccessibilityService implements
         mIgnoreViewClickedMs = res.getInteger(R.integer.ignore_view_clicked_ms);
         mAfterScrollTimeoutMs = res.getInteger(R.integer.after_scroll_timeout_ms);
 
-        mNavigator = new Navigator(displayWidth, displayHeight, hunLeft, hunRight, showHunOnBottom);
+        String[] excludedOverlayWindowTitles =
+                res.getStringArray(R.array.excluded_application_overlay_window_titles);
+
+        mNavigator = new Navigator(displayWidth, displayHeight, hunLeft, hunRight, showHunOnBottom,
+                excludedOverlayWindowTitles);
         mNavigator.initHostApp(getPackageManager());
 
         mPrefs = createDeviceProtectedStorageContext().getSharedPreferences(SHARED_PREFS,
@@ -606,7 +631,6 @@ public class RotaryService extends AccessibilityService implements
             // TODO(b/169423887): Figure out how to configure the default IME through Android
             // without needing to do this.
             setCurrentIme(mTouchInputMethod);
-
         }
 
         mAfterFocusTimeoutMs = res.getInteger(R.integer.after_focus_timeout_ms);
@@ -674,19 +698,15 @@ public class RotaryService extends AccessibilityService implements
                     if (ready) {
                         mCarInputManager =
                                 (CarInputManager) mCar.getCarManager(Car.CAR_INPUT_SERVICE);
-                        mCarInputManager.requestInputEventCapture(this,
-                                CarInputManager.TARGET_DISPLAY_TYPE_MAIN,
+                        mCarInputManager.requestInputEventCapture(
+                                CarOccupantZoneManager.DISPLAY_TYPE_MAIN,
                                 mInputTypes,
-                                CarInputManager.CAPTURE_REQ_FLAGS_ALLOW_DELAYED_GRANT);
+                                CarInputManager.CAPTURE_REQ_FLAGS_ALLOW_DELAYED_GRANT,
+                                /* callback= */ this);
                     }
                 });
 
-        if (Build.IS_DEBUGGABLE) {
-            AccessibilityServiceInfo serviceInfo = getServiceInfo();
-            // Filter testing KeyEvents from a keyboard.
-            serviceInfo.flags |= FLAG_REQUEST_FILTER_KEY_EVENTS;
-            setServiceInfo(serviceInfo);
-        }
+        updateServiceInfo();
 
         mInputManager = getSystemService(InputManager.class);
 
@@ -695,6 +715,10 @@ public class RotaryService extends AccessibilityService implements
 
         // Register an observer to update mTouchInputMethod whenever the user switches IMEs.
         registerInputMethodObserver();
+
+        // Register an observer to update the service info when the developer changes the filter
+        // setting.
+        registerFilterObserver();
     }
 
     @Override
@@ -708,8 +732,9 @@ public class RotaryService extends AccessibilityService implements
         getWindowContext().unregisterReceiver(mHomeButtonReceiver);
 
         unregisterInputMethodObserver();
+        unregisterFilterObserver();
         if (mCarInputManager != null) {
-            mCarInputManager.releaseInputEventCapture(CarInputManager.TARGET_DISPLAY_TYPE_MAIN);
+            mCarInputManager.releaseInputEventCapture(CarOccupantZoneManager.DISPLAY_TYPE_MAIN);
         }
         if (mCar != null) {
             mCar.disconnect();
@@ -800,8 +825,9 @@ public class RotaryService extends AccessibilityService implements
      * click events.
      */
     @Override
-    public void onKeyEvents(int targetDisplayId, List<KeyEvent> events) {
-        if (!isValidDisplayId(targetDisplayId)) {
+    public void onKeyEvents(@DisplayTypeEnum int targetDisplayType,
+            @NonNull List<KeyEvent> events) {
+        if (!isValidDisplayType(targetDisplayType)) {
             return;
         }
         for (KeyEvent event : events) {
@@ -814,19 +840,14 @@ public class RotaryService extends AccessibilityService implements
      * RotaryEvent}s generated by a navigation controller.
      */
     @Override
-    public void onRotaryEvents(int targetDisplayId, List<RotaryEvent> events) {
-        if (!isValidDisplayId(targetDisplayId)) {
+    public void onRotaryEvents(@DisplayTypeEnum int targetDisplayType,
+            @NonNull List<RotaryEvent> events) {
+        if (!isValidDisplayType(targetDisplayType)) {
             return;
         }
         for (RotaryEvent rotaryEvent : events) {
             handleRotaryEvent(rotaryEvent);
         }
-    }
-
-    @Override
-    public void onCaptureStateChanged(int targetDisplayId,
-            @android.annotation.NonNull @CarInputManager.InputTypeEnum int[] activeInputTypes) {
-        // Do nothing.
     }
 
     private Context getWindowContext() {
@@ -881,6 +902,7 @@ public class RotaryService extends AccessibilityService implements
                 FLAG_NOT_FOCUSABLE | FLAG_WATCH_OUTSIDE_TOUCH,
                 PixelFormat.TRANSPARENT);
         windowLayoutParams.gravity = Gravity.RIGHT | Gravity.TOP;
+        windowLayoutParams.privateFlags |= PRIVATE_FLAG_TRUSTED_OVERLAY;
         WindowManager windowManager = getSystemService(WindowManager.class);
         windowManager.addView(frameLayout, windowLayoutParams);
     }
@@ -895,6 +917,30 @@ public class RotaryService extends AccessibilityService implements
         if (mFocusedNode != null) {
             setFocusedNode(null);
         }
+    }
+
+    /**
+     * Updates this accessibility service's info, enabling or disabling key event filtering
+     * depending on a setting.
+     */
+    private void updateServiceInfo() {
+        AccessibilityServiceInfo serviceInfo = getServiceInfo();
+        if (serviceInfo == null) {
+            L.w("Service info not available");
+            return;
+        }
+        int flags = serviceInfo.flags;
+        boolean filterKeyEvents = Settings.Secure.getInt(getContentResolver(),
+                KEY_ROTARY_KEY_EVENT_FILTER, /* def= */ 0) != 0;
+        if (filterKeyEvents) {
+            flags |= FLAG_REQUEST_FILTER_KEY_EVENTS;
+        } else {
+            flags &= ~FLAG_REQUEST_FILTER_KEY_EVENTS;
+        }
+        if (flags == serviceInfo.flags) return;
+        L.d((filterKeyEvents ? "Enabling" : "Disabling") + " key event filtering");
+        serviceInfo.flags = flags;
+        setServiceInfo(serviceInfo);
     }
 
     /**
@@ -934,11 +980,39 @@ public class RotaryService extends AccessibilityService implements
         }
     }
 
-    private static boolean isValidDisplayId(int displayId) {
-        if (displayId == CarInputManager.TARGET_DISPLAY_TYPE_MAIN) {
+    /**
+     * Registers an observer to update our accessibility service info whenever the developer changes
+     * the key event filter setting.
+     */
+    private void registerFilterObserver() {
+        if (mKeyEventFilterObserver != null) {
+            throw new IllegalStateException("Filter observer already registered");
+        }
+        mKeyEventFilterObserver = new ContentObserver(new Handler(Looper.myLooper())) {
+            @Override
+            public void onChange(boolean selfChange) {
+                updateServiceInfo();
+            }
+        };
+        getContentResolver().registerContentObserver(
+                Settings.Secure.getUriFor(KEY_ROTARY_KEY_EVENT_FILTER),
+                /* notifyForDescendants= */ false,
+                mKeyEventFilterObserver);
+    }
+
+    /** Unregisters the observer registered by {@link #registerFilterObserver}. */
+    private void unregisterFilterObserver() {
+        if (mKeyEventFilterObserver != null) {
+            getContentResolver().unregisterContentObserver(mKeyEventFilterObserver);
+            mKeyEventFilterObserver = null;
+        }
+    }
+
+    private static boolean isValidDisplayType(int displayType) {
+        if (displayType == CarOccupantZoneManager.DISPLAY_TYPE_MAIN) {
             return true;
         }
-        L.e("RotaryService shouldn't capture events from display ID " + displayId);
+        L.e("RotaryService shouldn't capture events from display type " + displayType);
         return false;
     }
 
@@ -1311,13 +1385,16 @@ public class RotaryService extends AccessibilityService implements
 
         // Case 2: the focused node doesn't support rotate directly, it's in application window,
         // and it's not in the host app.
-        // We should inject KEYCODE_DPAD_CENTER event (or KEYCODE_ENTER in a WebView), then the
-        // application will handle the injected event.
+        // We should inject KEYCODE_DPAD_CENTER event (or KEYCODE_ENTER/KEYCODE_SPACE in a WebView),
+        // then the application will handle the injected event.
         if (isInApplicationWindow(mFocusedNode) && !mNavigator.isHostNode(mFocusedNode)) {
             L.d("Inject KeyEvent in application window");
-            int keyCode = mNavigator.isInWebView(mFocusedNode)
-                    ? KeyEvent.KEYCODE_ENTER
-                    : KeyEvent.KEYCODE_DPAD_CENTER;
+            int keyCode = KeyEvent.KEYCODE_DPAD_CENTER;
+            if (mNavigator.isInWebView(mFocusedNode)) {
+                keyCode = mFocusedNode.isCheckable()
+                    ? KeyEvent.KEYCODE_SPACE
+                    : KeyEvent.KEYCODE_ENTER;
+            }
             injectKeyEvent(keyCode, action);
             setIgnoreViewClickedNode(mFocusedNode);
             return;
@@ -1639,8 +1716,8 @@ public class RotaryService extends AccessibilityService implements
         }
         boolean clockwise = rotaryEvent.isClockwise();
         int count = rotaryEvent.getNumberOfClicks();
-        // TODO(b/153195148): Use the first eventTime for now. We'll need to improve it later.
-        long eventTime = rotaryEvent.getUptimeMillisForClick(0);
+        // TODO(b/153195148): Use the last eventTime for now. We'll need to improve it later.
+        long eventTime = rotaryEvent.getUptimeMillisForClick(count - 1);
         handleRotateEvent(clockwise, count, eventTime);
     }
 
@@ -2013,7 +2090,12 @@ public class RotaryService extends AccessibilityService implements
      */
     private void maybeClearFocusInCurrentWindow(@Nullable AccessibilityNodeInfo targetFocus) {
         mFocusedNode = Utils.refreshNode(mFocusedNode);
-        if (mFocusedNode == null || !mFocusedNode.isFocused()
+        if (mFocusedNode == null
+                // No need to clear focus if mFocusedNode is not focused. However, when it's a node
+                // in a WebView, its state might not be up to date, so mFocusedNode.isFocused()
+                // may return false even if the view represented by mFocusedNode is focused.
+                // So don't check the focused state if it's in WebView.
+                || (!mFocusedNode.isFocused() && !mNavigator.isInWebView(mFocusedNode))
                 || (targetFocus != null
                         && mFocusedNode.getWindowId() == targetFocus.getWindowId())) {
             return;
@@ -2307,13 +2389,13 @@ public class RotaryService extends AccessibilityService implements
     /** Switches to the rotary IME or the touch IME if needed. */
     private void updateIme() {
         String newIme = mInRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
+        if (mInRotaryMode && !isValidIme(newIme)) {
+            L.w("Rotary IME doesn't exist: " + newIme);
+            return;
+        }
         String oldIme = getCurrentIme();
         if (oldIme.equals(newIme)) {
             L.v("No need to switch IME: " + newIme);
-            return;
-        }
-        if (mInRotaryMode && !isValidIme(newIme)) {
-            L.w("Rotary IME doesn't exist: " + newIme);
             return;
         }
         setCurrentIme(newIme);
@@ -2431,6 +2513,13 @@ public class RotaryService extends AccessibilityService implements
         return true;
     }
 
+    @ExcludeFromCodeCoverageGeneratedReport(reason = BOILERPLATE_CODE)
+    @VisibleForTesting
+    void setRotateAcceleration(int rotationAcceleration2xMs, int rotationAcceleration3xMs) {
+        mRotationAcceleration2xMs = rotationAcceleration2xMs;
+        mRotationAcceleration3xMs = rotationAcceleration3xMs;
+    }
+
     /**
      * Returns the number of "ticks" to rotate for a single rotate event with the given detent
      * {@code count} at the given time. Uses and updates {@link #mLastRotateEventTime}. The result
@@ -2518,51 +2607,73 @@ public class RotaryService extends AccessibilityService implements
         mInputManager = inputManager;
     }
 
+    @ExcludeFromCodeCoverageGeneratedReport(reason = DUMP_INFO)
     @Override
-    protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
-        long uptimeMillis = SystemClock.uptimeMillis();
-        writer.println("rotationAcceleration2x: " + mRotationAcceleration2xMs
-                + " ms, 3x: " + mRotationAcceleration3xMs + " ms");
-        writer.println("focusedNode: " + mFocusedNode);
-        writer.println("editNode: " + mEditNode);
-        writer.println("focusArea: " + mFocusArea);
-        writer.println("lastTouchedNode: " + mLastTouchedNode);
-        writer.println("ignoreViewClicked: " + mIgnoreViewClickedMs + "ms");
-        writer.println("ignoreViewClickedNode: " + mIgnoreViewClickedNode
-                + ", time: " + (mLastViewClickedTime - uptimeMillis));
-        writer.println("rotaryInputMethod: " + mRotaryInputMethod);
-        writer.println("defaultTouchInputMethod: " + mDefaultTouchInputMethod);
-        writer.println("touchInputMethod: " + mTouchInputMethod);
-        writer.println("hunNudgeDirection: " + Navigator.directionToString(mHunNudgeDirection)
-                + ", escape: " + Navigator.directionToString(mHunEscapeNudgeDirection));
-        writer.println("offScreenNudgeGlobalActions: "
-                + Arrays.toString(mOffScreenNudgeGlobalActions));
-        writer.print("offScreenNudgeKeyCodes: [");
-        for (int i = 0; i < mOffScreenNudgeKeyCodes.length; i++) {
-            if (i > 0) {
-                writer.print(", ");
-            }
-            writer.print(KeyEvent.keyCodeToString(mOffScreenNudgeKeyCodes[i]));
-        }
-        writer.println("]");
-        writer.println("offScreenNudgeIntents: " + Arrays.toString(mOffScreenNudgeIntents));
-        writer.println("afterScrollTimeout: " + mAfterScrollTimeoutMs + " ms");
-        writer.println("afterScrollAction: " + mAfterScrollAction
-                + ", until: " + (mAfterScrollActionUntil - uptimeMillis));
-        writer.println("inRotaryMode: " + mInRotaryMode);
-        writer.println("inDirectManipulationMode: " + mInDirectManipulationMode);
-        writer.println("lastRotateEventTime: " + (mLastRotateEventTime - uptimeMillis));
-        writer.println("longPress: " + mLongPressMs + " ms, triggered: " + mLongPressTriggered);
-        writer.println("foregroundActivity: " + (mForegroundActivity == null
-                ? "null" : mForegroundActivity.flattenToShortString()));
-        writer.println("afterFocusTimeout: " + mAfterFocusTimeoutMs + " ms");
-        writer.println("pendingFocusedNode: " + mPendingFocusedNode
-                + ", expiration: " + (mPendingFocusedExpirationTime - uptimeMillis));
-
-        writer.println("navigator:");
-        mNavigator.dump(fd, writer, args);
-
-        writer.println("windowCache:");
-        mWindowCache.dump(fd, writer, args);
+    protected void dump(@NonNull FileDescriptor fd, @NonNull PrintWriter writer,
+            @Nullable String[] args) {
+        boolean dumpAsProto = args != null && ArrayUtils.indexOf(args, "proto") != -1;
+        DualDumpOutputStream dumpOutputStream = dumpAsProto
+                ? new DualDumpOutputStream(new ProtoOutputStream(new FileOutputStream(fd)))
+                : new DualDumpOutputStream(new IndentingPrintWriter(writer, "  "));
+        dumpOutputStream.write("rotationAcceleration2xMs",
+                RotaryProtos.RotaryService.ROTATION_ACCELERATION_2X_MS, mRotationAcceleration2xMs);
+        dumpOutputStream.write("rotationAcceleration3xMs",
+                RotaryProtos.RotaryService.ROTATION_ACCELERATION_3X_MS, mRotationAcceleration3xMs);
+        DumpUtils.writeObject(dumpOutputStream, "focusedNode",
+                RotaryProtos.RotaryService.FOCUSED_NODE, mFocusedNode);
+        DumpUtils.writeObject(dumpOutputStream, "editNode", RotaryProtos.RotaryService.EDIT_NODE,
+                mEditNode);
+        DumpUtils.writeObject(dumpOutputStream, "focusArea", RotaryProtos.RotaryService.FOCUS_AREA,
+                mFocusArea);
+        DumpUtils.writeObject(dumpOutputStream, "lastTouchedNode",
+                RotaryProtos.RotaryService.LAST_TOUCHED_NODE, mLastTouchedNode);
+        dumpOutputStream.write("rotaryInputMethod", RotaryProtos.RotaryService.ROTARY_INPUT_METHOD,
+                mRotaryInputMethod);
+        dumpOutputStream.write("defaultTouchInputMethod",
+                RotaryProtos.RotaryService.DEFAULT_TOUCH_INPUT_METHOD, mDefaultTouchInputMethod);
+        dumpOutputStream.write("touchInputMethod", RotaryProtos.RotaryService.TOUCH_INPUT_METHOD,
+                mTouchInputMethod);
+        DumpUtils.writeFocusDirection(dumpOutputStream, dumpAsProto, "hunNudgeDirection",
+                RotaryProtos.RotaryService.HUN_NUDGE_DIRECTION, mHunNudgeDirection);
+        DumpUtils.writeFocusDirection(dumpOutputStream, dumpAsProto, "hunEscapeNudgeDirection",
+                RotaryProtos.RotaryService.HUN_ESCAPE_NUDGE_DIRECTION, mHunEscapeNudgeDirection);
+        DumpUtils.writeInts(dumpOutputStream, dumpAsProto, "offScreenNudgeGlobalActions",
+                RotaryProtos.RotaryService.OFF_SCREEN_NUDGE_GLOBAL_ACTIONS,
+                mOffScreenNudgeGlobalActions);
+        DumpUtils.writeKeyCodes(dumpOutputStream, dumpAsProto, "offScreenNudgeKeyCodes",
+                RotaryProtos.RotaryService.OFF_SCREEN_NUDGE_KEY_CODES, mOffScreenNudgeKeyCodes);
+        DumpUtils.writeObjects(dumpOutputStream, dumpAsProto, "offScreenNudgeIntents",
+                RotaryProtos.RotaryService.OFF_SCREEN_NUDGE_INTENTS, mOffScreenNudgeIntents);
+        dumpOutputStream.write("afterScrollTimeoutMs",
+                RotaryProtos.RotaryService.AFTER_SCROLL_TIMEOUT_MS, mAfterFocusTimeoutMs);
+        DumpUtils.writeAfterScrollAction(dumpOutputStream, dumpAsProto, "afterScrollAction",
+                RotaryProtos.RotaryService.AFTER_SCROLL_ACTION, mAfterScrollAction);
+        dumpOutputStream.write("afterScrollActionUntil",
+                RotaryProtos.RotaryService.AFTER_SCROLL_ACTION_UNTIL, mAfterScrollActionUntil);
+        dumpOutputStream.write("inRotaryMode", RotaryProtos.RotaryService.IN_ROTARY_MODE,
+                mInRotaryMode);
+        dumpOutputStream.write("inDirectManipulationMode",
+                RotaryProtos.RotaryService.IN_DIRECT_MANIPULATION_MODE, mInDirectManipulationMode);
+        dumpOutputStream.write("lastRotateEventTime",
+                RotaryProtos.RotaryService.LAST_ROTATE_EVENT_TIME, mLastRotateEventTime);
+        dumpOutputStream.write("longPressMs", RotaryProtos.RotaryService.LONG_PRESS_MS,
+                mLongPressMs);
+        dumpOutputStream.write("longPressTriggered",
+                RotaryProtos.RotaryService.LONG_PRESS_TRIGGERED, mLongPressTriggered);
+        DumpUtils.writeComponentNameToString(dumpOutputStream, "foregroundActivity",
+                RotaryProtos.RotaryService.FOREGROUND_ACTIVITY, mForegroundActivity);
+        dumpOutputStream.write("afterFocusTimeoutMs",
+                RotaryProtos.RotaryService.AFTER_FOCUS_TIMEOUT_MS, mAfterFocusTimeoutMs);
+        DumpUtils.writeObject(dumpOutputStream, "pendingFocusedNode",
+                RotaryProtos.RotaryService.PENDING_FOCUSED_NODE, mPendingFocusedNode);
+        dumpOutputStream.write("pendingFocusedExpirationTime",
+                RotaryProtos.RotaryService.PENDING_FOCUSED_EXPIRATION_TIME,
+                mPendingFocusedExpirationTime);
+        mNavigator.dump(dumpOutputStream, dumpAsProto, "navigator",
+                RotaryProtos.RotaryService.NAVIGATOR);
+        mWindowCache.dump(dumpOutputStream, dumpAsProto, "windowCache",
+                RotaryProtos.RotaryService.WINDOW_CACHE);
+        dumpOutputStream.flush();
     }
+
 }
