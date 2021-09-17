@@ -26,9 +26,6 @@ import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 
-import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.BOILERPLATE_CODE;
-import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.DUMP_INFO;
-
 import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.view.Display;
@@ -40,7 +37,6 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
-import com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport;
 import com.android.car.ui.FocusArea;
 import com.android.car.ui.FocusParkingView;
 import com.android.internal.util.dump.DualDumpOutputStream;
@@ -989,7 +985,6 @@ class Navigator {
                 });
     }
 
-    @ExcludeFromCodeCoverageGeneratedReport(reason = DUMP_INFO)
     void dump(@NonNull DualDumpOutputStream dumpOutputStream, boolean dumpAsProto,
             @NonNull String fieldName, long fieldId) {
         long fieldToken = dumpOutputStream.start(fieldName, fieldId);
@@ -1004,7 +999,6 @@ class Navigator {
         dumpOutputStream.end(fieldToken);
     }
 
-    @ExcludeFromCodeCoverageGeneratedReport(reason = BOILERPLATE_CODE)
     static String directionToString(@View.FocusRealDirection int direction) {
         switch (direction) {
             case FOCUS_UP:
