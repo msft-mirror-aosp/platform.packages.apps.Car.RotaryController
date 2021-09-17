@@ -16,8 +16,6 @@
 
 package com.android.car.rotary;
 
-import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.DUMP_INFO;
-
 import android.content.ComponentName;
 import android.graphics.Rect;
 import android.view.KeyEvent;
@@ -28,7 +26,6 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport;
 import com.android.internal.util.dump.DualDumpOutputStream;
 
 import java.util.Arrays;
@@ -36,7 +33,6 @@ import java.util.Collection;
 import java.util.Map;
 
 /** Utility methods for dumpsys. */
-@ExcludeFromCodeCoverageGeneratedReport(reason = DUMP_INFO)
 final class DumpUtils {
     private DumpUtils() {}
 
