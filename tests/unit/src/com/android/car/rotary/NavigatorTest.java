@@ -15,6 +15,9 @@
  */
 package com.android.car.rotary;
 
+import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
+import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
+
 import static com.google.common.truth.Truth.assertThat;
 
 import android.app.Activity;
@@ -49,9 +52,6 @@ import java.util.List;
 @RunWith(AndroidJUnit4.class)
 public class NavigatorTest {
 
-    private final static String HOST_APP_PACKAGE_NAME = "host.app.package.name";
-    private final static String CLIENT_APP_PACKAGE_NAME = "client.app.package.name";
-
     private static UiAutomation sUiAutomoation;
 
     private final List<AccessibilityNodeInfo> mNodes = new ArrayList<>();
@@ -79,7 +79,8 @@ public class NavigatorTest {
         // The values of displayWidth and displayHeight don't affect the test, so just use 0.
         mNavigator = new Navigator(/* displayWidth= */ mDisplayBounds.right,
                 /* displayHeight= */ mDisplayBounds.bottom,
-                mHunWindowBounds.left, mHunWindowBounds.right, /* showHunOnBottom= */ false);
+                mHunWindowBounds.left, mHunWindowBounds.right, /* showHunOnBottom= */ false,
+                /* excludedOverlayWindowTitles= */ null);
         mNavigator.setNodeCopier(MockNodeCopierProvider.get());
         mNodeBuilder = new NodeBuilder(new ArrayList<>());
     }
@@ -763,17 +764,6 @@ public class NavigatorTest {
             button2View.setEnabled(false);
         });
 
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        // When searching for the target node, even though the states of the views are correct
-        // (i.e., button1View and button2View have been disabled), the states of the nodes might
-        // not be up to date (i.e., button1 and button2 haven't been disabled yet) because they're
-        // fetched from the node pool. So new nodes are created here to ensure the nodes are up to
-        // date with the most recent state changes of the views they represent.
-        AccessibilityNodeInfo button1 = createNode("button1");
-        assertThat(button1.isEnabled()).isFalse();
-        AccessibilityNodeInfo button2 = createNode("button2");
-        assertThat(button2.isEnabled()).isFalse();
-
         AccessibilityNodeInfo root = createNode("root");
         AccessibilityNodeInfo button3 = createNode("button3");
 
@@ -809,11 +799,11 @@ public class NavigatorTest {
         });
 
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        // When searching for the target node, even though the states of the views are correct
-        // (i.e., button3View and button4View have been disabled), the states of the nodes might
-        // not be up to date (i.e., button3 and button4 haven't been disabled yet) because they're
-        // fetched from the node pool. So new nodes are created here to ensure the nodes are up to
-        // date with the most recent state changes of the views they represent.
+        // Creating button3 and button4 is necessary to make the test pass. When searching for the
+        // target node, even though the states of the views are correct(i.e., button3View and
+        // button4View have been disabled), the states of the nodes might not be up to date (i.e.,
+        // button3 and button4 haven't been disabled yet) because they're fetched from the node
+        // pool. So creating new nodes here to refresh their states.
         AccessibilityNodeInfo button3 = createNode("button3");
         assertThat(button3.isEnabled()).isFalse();
         AccessibilityNodeInfo button4 = createNode("button4");
@@ -971,6 +961,108 @@ public class NavigatorTest {
     }
 
     /**
+     * Tests {@link Navigator#findNudgeTargetFocusArea} in the following layout:
+     *
+     * App window:
+     * <pre>
+     *
+     *    ============focus area1===========
+     *    =                                =
+     *    =  .............                 =
+     *    =  .   view1   .                 =
+     *    =  .............                 =
+     *    =                                =
+     *    ==================================
+     *
+     *</pre>
+     *
+     * IME window:
+     *<pre>
+     *
+     *    ============focus area2===========
+     *    =                                =
+     *    =  .............                 =
+     *    =  .           .                 =
+     *    =  .   key1    .                 =
+     *    =  .           .                 =
+     *    =  .............                 =
+     *    =                                =
+     *    ==================================
+     *    ============focus area3===========
+     *    =                                =
+     *    =  .............                 =
+     *    =  .           .                 =
+     *    =  .   key2    .                 =
+     *    =  . (focused) .                 =
+     *    =  .............                 =
+     *    =                                =
+     *    ==================================
+     *
+     * </pre>
+     * where App window and IME window overlap at the bottom.
+     */
+    @Test
+    public void testFindNudgeTargetFocusArea3() {
+        // App window.
+        Rect appWindowBounds = new Rect(0,0, 1080, 600);
+        AccessibilityNodeInfo appRoot = mNodeBuilder
+                .setBoundsInScreen(appWindowBounds)
+                .build();
+        AccessibilityWindowInfo appWindow = new WindowBuilder()
+                .setRoot(appRoot)
+                .setType(TYPE_APPLICATION)
+                .setBoundsInScreen(appWindowBounds)
+                .build();
+        AccessibilityNodeInfo focusArea1 = mNodeBuilder
+                .setBoundsInScreen(appWindowBounds)
+                .setFocusArea()
+                .setParent(appRoot)
+                .build();
+        AccessibilityNodeInfo view1 = mNodeBuilder
+                .setParent(focusArea1)
+                .build();
+
+        // IME window.
+        Rect imeWindowBounds = new Rect(0,528, 1080, 600);
+        AccessibilityNodeInfo imeRoot = mNodeBuilder
+                .setBoundsInScreen(imeWindowBounds)
+                .build();
+        AccessibilityWindowInfo imeWindow = new WindowBuilder()
+                .setRoot(imeRoot)
+                .setType(TYPE_INPUT_METHOD)
+                .setBoundsInScreen(imeWindowBounds)
+                .build();
+        AccessibilityNodeInfo focusArea2 = mNodeBuilder
+                .setBoundsInScreen(new Rect(0, 528, 1080, 564))
+                .setFocusArea()
+                .setParent(imeRoot)
+                .build();
+        AccessibilityNodeInfo key1 = mNodeBuilder
+                .setWindow(imeWindow)
+                .setParent(focusArea2)
+                .build();
+        AccessibilityNodeInfo focusArea3 = mNodeBuilder
+                .setBoundsInScreen(new Rect(0, 564, 1080, 600))
+                .setFocusArea()
+                .setParent(imeRoot)
+                .build();
+        AccessibilityNodeInfo key2 = mNodeBuilder
+                .setWindow(imeWindow)
+                .setBoundsInScreen(new Rect(96, 566, 139, 598))
+                .setParent(focusArea3)
+                .build();
+
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(appWindow);
+        windows.add(imeWindow);
+
+        // Nudge up from the second row of IME, it should focus on the first row of IME.
+        AccessibilityNodeInfo targetFocusArea =
+                mNavigator.findNudgeTargetFocusArea(windows, key2, focusArea3, View.FOCUS_UP);
+        assertThat(targetFocusArea).isEqualTo(focusArea2);
+    }
+
+    /**
      * Tests {@link Navigator#findFocusParkingView} in the following node tree:
      * <pre>
      *                      root
@@ -1114,351 +1206,6 @@ public class NavigatorTest {
     }
 
     /**
-     * Tests {@link Navigator#getRoot} in the following node tree:
-     * <pre>
-     *                  clientAppRoot
-     *                     /    \
-     *                    /      \
-     *              button1  surfaceView
-     *                             |
-     *                        hostAppRoot
-     *                           /    \
-     *                         /       \
-     *            focusParkingView     button2
-     * </pre>
-     */
-    @Test
-    public void testGetRoot_returnHostAppRoot() {
-        mNavigator.addClientApp(CLIENT_APP_PACKAGE_NAME);
-        mNavigator.mSurfaceViewHelper.mHostApp = HOST_APP_PACKAGE_NAME;
-
-        AccessibilityNodeInfo clientAppRoot = mNodeBuilder
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo button1 = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo surfaceView = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .setClassName(Utils.SURFACE_VIEW_CLASS_NAME)
-                .build();
-
-        AccessibilityNodeInfo hostAppRoot = mNodeBuilder
-                .setParent(surfaceView)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo focusParkingView = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .setFpv()
-                .build();
-        AccessibilityNodeInfo button2 = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-
-        assertThat(mNavigator.getRoot(button2)).isEqualTo(hostAppRoot);
-    }
-
-    /**
-     * Tests {@link Navigator#getRoot} in the following node tree:
-     * <pre>
-     *                     root
-     *                     /    \
-     *                    /      \
-     *              button1    viewGroup1
-     *                             |
-     *                        viewGroup2
-     *                           /    \
-     *                         /       \
-     *            focusParkingView     button2
-     * </pre>
-     */
-    @Test
-    public void testGetRoot_returnNodeRoot() {
-        AccessibilityNodeInfo root = mNodeBuilder.build();
-        AccessibilityNodeInfo button1 = mNodeBuilder.setParent(root).build();
-        AccessibilityNodeInfo viewGroup1 = mNodeBuilder.setParent(root).build();
-        AccessibilityNodeInfo viewGroup2 = mNodeBuilder.setParent(viewGroup1).build();
-        AccessibilityNodeInfo focusParkingView = mNodeBuilder
-                .setParent(viewGroup2)
-                .setFpv()
-                .build();
-        AccessibilityNodeInfo button2 = mNodeBuilder.setParent(viewGroup2).build();
-
-        assertThat(mNavigator.getRoot(button2)).isEqualTo(root);
-    }
-
-    /**
-     * Tests {@link Navigator#getRoot} in the window:
-     * <pre>
-     *                     windowRoot
-     *                        ...
-     *                      button
-     * </pre>
-     * where {@code windowRoot} is the root node of the window containing {@code button}.
-     */
-    @Test
-    public void testGetRoot_returnWindowRoot() {
-        AccessibilityNodeInfo root = mNodeBuilder.build();
-        AccessibilityWindowInfo window = new WindowBuilder().setRoot(root).build();
-        AccessibilityNodeInfo button = mNodeBuilder.setWindow(window).build();
-        assertThat(mNavigator.getRoot(button)).isEqualTo(root);
-    }
-
-    /**
-     * Tests {@link Navigator#findFocusParkingViewInRoot} in the following node tree:
-     * <pre>
-     *                  clientAppRoot
-     *                     /    \
-     *                    /      \
-     *              button1  surfaceView
-     *                             |
-     *                        hostAppRoot
-     *                           /    \
-     *                         /       \
-     *            focusParkingView     button2
-     * </pre>
-     */
-    @Test
-    public void testFindFocusParkingViewInRoot() {
-        mNavigator.addClientApp(CLIENT_APP_PACKAGE_NAME);
-        mNavigator.mSurfaceViewHelper.mHostApp = HOST_APP_PACKAGE_NAME;
-
-        AccessibilityNodeInfo clientAppRoot = mNodeBuilder
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo button1 = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo surfaceView = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .setClassName(Utils.SURFACE_VIEW_CLASS_NAME)
-                .build();
-
-        AccessibilityNodeInfo hostAppRoot = mNodeBuilder
-                .setParent(surfaceView)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo focusParkingView = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .setFpv()
-                .build();
-        AccessibilityNodeInfo button2 = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-
-        assertThat(mNavigator.findFocusParkingViewInRoot(clientAppRoot))
-                .isEqualTo(focusParkingView);
-    }
-
-    /**
-     * Tests {@link Navigator#findSurfaceViewInRoot} in the following node tree:
-     * <pre>
-     *                  clientAppRoot
-     *                     /    \
-     *                    /      \
-     *              button1  surfaceView
-     *                             |
-     *                        hostAppRoot
-     *                           /    \
-     *                         /       \
-     *            focusParkingView     button2
-     * </pre>
-     */
-    @Test
-    public void testFindSurfaceViewInRoot() {
-        mNavigator.addClientApp(CLIENT_APP_PACKAGE_NAME);
-        mNavigator.mSurfaceViewHelper.mHostApp = HOST_APP_PACKAGE_NAME;
-
-        AccessibilityNodeInfo clientAppRoot = mNodeBuilder
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo button1 = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo surfaceView = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .setClassName(Utils.SURFACE_VIEW_CLASS_NAME)
-                .build();
-
-        AccessibilityNodeInfo hostAppRoot = mNodeBuilder
-                .setParent(surfaceView)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo focusParkingView = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .setFpv()
-                .build();
-        AccessibilityNodeInfo button2 = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-
-        assertThat(mNavigator.findSurfaceViewInRoot(clientAppRoot)).isEqualTo(surfaceView);
-    }
-
-    /**
-     * Tests {@link Navigator#getDescendantHostRoot} in the following node tree:
-     * <pre>
-     *                  clientAppRoot
-     *                     /    \
-     *                    /      \
-     *              button1  surfaceView
-     *                             |
-     *                        hostAppRoot
-     *                           /    \
-     *                         /       \
-     *            focusParkingView     button2
-     * </pre>
-     */
-    @Test
-    public void testGetDescendantHostRoot() {
-        mNavigator.addClientApp(CLIENT_APP_PACKAGE_NAME);
-        mNavigator.mSurfaceViewHelper.mHostApp = HOST_APP_PACKAGE_NAME;
-
-        AccessibilityNodeInfo clientAppRoot = mNodeBuilder
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo button1 = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo surfaceView = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .setClassName(Utils.SURFACE_VIEW_CLASS_NAME)
-                .build();
-
-        AccessibilityNodeInfo hostAppRoot = mNodeBuilder
-                .setParent(surfaceView)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo focusParkingView = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .setFpv()
-                .build();
-        AccessibilityNodeInfo button2 = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-
-        assertThat(mNavigator.getDescendantHostRoot(clientAppRoot)).isEqualTo(hostAppRoot);
-    }
-
-    /**
-     * Tests {@link Navigator#findFocusAreas} in the following node tree:
-     * <pre>
-     *                  clientAppRoot
-     *                     /    \
-     *                    /      \
-     *              button1  surfaceView
-     *                             |
-     *                        hostAppRoot
-     *                           /    \
-     *                         /       \
-     *            focusParkingView     button2
-     * </pre>
-     */
-    @Test
-    public void testFindFocusAreas_inHostApp() {
-        mNavigator.addClientApp(CLIENT_APP_PACKAGE_NAME);
-        mNavigator.mSurfaceViewHelper.mHostApp = HOST_APP_PACKAGE_NAME;
-
-        AccessibilityNodeInfo clientAppRoot = mNodeBuilder
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo button1 = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo surfaceView = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .setClassName(Utils.SURFACE_VIEW_CLASS_NAME)
-                .build();
-
-        AccessibilityNodeInfo hostAppRoot = mNodeBuilder
-                .setParent(surfaceView)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo focusParkingView = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .setFpv()
-                .build();
-        AccessibilityNodeInfo button2 = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-
-        AccessibilityWindowInfo window = new WindowBuilder().setRoot(clientAppRoot).build();
-
-        assertThat(mNavigator.findFocusAreas(window)).containsExactly(hostAppRoot);
-    }
-
-    /**
-     * Tests {@link Navigator#findFocusedNodeInRoot} in the following node tree:
-     * <pre>
-     *                  clientAppRoot
-     *                     /    \
-     *                    /      \
-     *              button1  surfaceView(focused)
-     *                             |
-     *                        hostAppRoot
-     *                           /    \
-     *                         /       \
-     *            focusParkingView     button2(focused)
-     * </pre>
-     */
-    @Test
-    public void testFindFocusedNodeInRoot_inHostApp() {
-        mNavigator.addClientApp(CLIENT_APP_PACKAGE_NAME);
-        mNavigator.mSurfaceViewHelper.mHostApp = HOST_APP_PACKAGE_NAME;
-
-        AccessibilityNodeInfo clientAppRoot = mNodeBuilder
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo button1 = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo surfaceView = mNodeBuilder
-                .setParent(clientAppRoot)
-                .setFocused(true)
-                .setPackageName(CLIENT_APP_PACKAGE_NAME)
-                .setClassName(Utils.SURFACE_VIEW_CLASS_NAME)
-                .build();
-
-        AccessibilityNodeInfo hostAppRoot = mNodeBuilder
-                .setParent(surfaceView)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-        AccessibilityNodeInfo focusParkingView = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .setFpv()
-                .build();
-        AccessibilityNodeInfo button2 = mNodeBuilder
-                .setParent(hostAppRoot)
-                .setFocused(true)
-                .setPackageName(HOST_APP_PACKAGE_NAME)
-                .build();
-
-        assertThat(mNavigator.findFocusedNodeInRoot(clientAppRoot)).isEqualTo(button2);
-    }
-
-    /**
      * Starts the test activity with the given layout and initializes the root
      * {@link AccessibilityNodeInfo}.
      */
@@ -1479,7 +1226,6 @@ public class NavigatorTest {
         List<AccessibilityNodeInfo> nodes =
                 mWindowRoot.findAccessibilityNodeInfosByViewId(fullViewId);
         if (nodes.isEmpty()) {
-            L.e("Failed to create node by View ID " + viewId);
             return null;
         }
         mNodes.addAll(nodes);
@@ -1494,7 +1240,6 @@ public class NavigatorTest {
     private AccessibilityNodeInfo createNodeByText(String text) {
         List<AccessibilityNodeInfo> nodes = mWindowRoot.findAccessibilityNodeInfosByText(text);
         if (nodes.isEmpty()) {
-            L.e("Failed to create node by text '" + text + "'");
             return null;
         }
         return nodes.get(0);

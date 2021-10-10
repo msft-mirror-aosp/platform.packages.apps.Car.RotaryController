@@ -40,6 +40,7 @@ import static org.testng.AssertJUnit.assertNull;
 
 import android.app.Activity;
 import android.app.UiAutomation;
+import android.car.CarOccupantZoneManager;
 import android.car.input.CarInputManager;
 import android.car.input.RotaryEvent;
 import android.content.ComponentName;
@@ -77,8 +78,10 @@ public class RotaryServiceTest {
 
     private final static String HOST_APP_PACKAGE_NAME = "host.app.package.name";
     private final static String CLIENT_APP_PACKAGE_NAME = "client.app.package.name";
+    private static final int ROTATION_ACCELERATION_2X_MS = 50;
+    private static final int ROTATION_ACCELERATION_3X_MS = 25;
 
-    private static UiAutomation sUiAutomoation;
+    private static UiAutomation sUiAutomation;
 
     private final List<AccessibilityNodeInfo> mNodes = new ArrayList<>();
 
@@ -94,7 +97,7 @@ public class RotaryServiceTest {
 
     @BeforeClass
     public static void setUpClass() {
-        sUiAutomoation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        sUiAutomation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
     }
 
     @Before
@@ -107,6 +110,8 @@ public class RotaryServiceTest {
         mRotaryService.setNavigator(mNavigator);
         mRotaryService.setNodeCopier(MockNodeCopierProvider.get());
         mRotaryService.setInputManager(mock(InputManager.class));
+        mRotaryService.setRotateAcceleration(ROTATION_ACCELERATION_2X_MS,
+                ROTATION_ACCELERATION_3X_MS);
         mNodeBuilder = new NodeBuilder(new ArrayList<>());
     }
 
@@ -341,6 +346,8 @@ public class RotaryServiceTest {
      */
     @Test
     public void testInitFocus_focusOnHostNode() {
+        initActivity(R.layout.rotary_service_test_1_activity);
+
         mNavigator.addClientApp(CLIENT_APP_PACKAGE_NAME);
         mNavigator.mSurfaceViewHelper.mHostApp = HOST_APP_PACKAGE_NAME;
 
@@ -425,7 +432,7 @@ public class RotaryServiceTest {
         RotaryEvent rotaryEvent = new RotaryEvent(inputType, clockwise, timestamps);
         List<RotaryEvent> events = Collections.singletonList(rotaryEvent);
 
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         mRotaryService.onRotaryEvents(validDisplayId, events);
 
         AccessibilityNodeInfo defaultFocusNode = createNode("defaultFocus");
@@ -472,7 +479,7 @@ public class RotaryServiceTest {
         RotaryEvent rotaryEvent = new RotaryEvent(inputType, clockwise, timestamps);
         List<RotaryEvent> events = Collections.singletonList(rotaryEvent);
 
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         mRotaryService.onRotaryEvents(validDisplayId, events);
 
         AccessibilityNodeInfo button3Node = createNode("button3");
@@ -489,6 +496,94 @@ public class RotaryServiceTest {
         events = Collections.singletonList(rotaryEvent);
         mRotaryService.onRotaryEvents(validDisplayId, events);
         assertThat(mRotaryService.getFocusedNode()).isEqualTo(defaultFocusNode);
+    }
+
+    /**
+     * Tests {@link RotaryService#onRotaryEvents} in the following view tree:
+     * <pre>
+     *                        root
+     *                      /      \
+     *                     /        \
+     *      focusParkingView        focusArea
+     *                           /   |   |    \
+     *                         /     |   |       \
+     *             defaultFocus button2 button3 ... button6
+     *              (focused)
+     * </pre>
+     */
+    @Test
+    public void testOnRotaryEvents_acceleration() {
+        initActivity(R.layout.rotary_service_test_3_activity);
+
+        AccessibilityWindowInfo window = new WindowBuilder()
+                .setRoot(mWindowRoot)
+                .setBoundsInScreen(mWindowRoot.getBoundsInScreen())
+                .build();
+        List<AccessibilityWindowInfo> windows = Collections.singletonList(window);
+        when(mRotaryService.getWindows()).thenReturn(windows);
+
+        AccessibilityNodeInfo defaultFocusNode = createNode("defaultFocus");
+        assertThat(defaultFocusNode.isFocused()).isTrue();
+        mRotaryService.setFocusedNode(defaultFocusNode);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(defaultFocusNode);
+
+
+        // Rotating the controller clockwise slowly should move the focus from defaultFocus to
+        // button2.
+        int inputType = CarInputManager.INPUT_TYPE_ROTARY_NAVIGATION;
+        int eventTime = ROTATION_ACCELERATION_2X_MS + 1;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        AccessibilityNodeInfo button2Node = createNode("button2");
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button2Node);
+
+        // Move focus back to defaultFocus.
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(defaultFocusNode);
+
+        // Rotating the controller clockwise somewhat fast should move the focus from defaultFocus
+        // to button3.
+        eventTime += ROTATION_ACCELERATION_2X_MS;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        AccessibilityNodeInfo button3Node = createNode("button3");
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button3Node);
+
+        // Move focus back to defaultFocus.
+        eventTime += ROTATION_ACCELERATION_2X_MS;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+
+        // Rotating the controller clockwise very faster should move the focus from defaultFocus to
+        // button4.
+        eventTime += ROTATION_ACCELERATION_3X_MS;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        AccessibilityNodeInfo button4Node = createNode("button4");
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button4Node);
+
+        // Move focus back to defaultFocus.
+        eventTime += ROTATION_ACCELERATION_3X_MS;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+
+        // Rotating the controller two detents clockwise somewhat fast should move the focus from
+        // defaultFocus to button5.
+        mRotaryService.onRotaryEvents(validDisplayId, Collections.singletonList(
+                new RotaryEvent(inputType, true,
+                        new long[]{eventTime + ROTATION_ACCELERATION_2X_MS,
+                                eventTime + ROTATION_ACCELERATION_2X_MS * 2})));
+        AccessibilityNodeInfo button5Node = createNode("button5");
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button5Node);
     }
 
     /**
@@ -510,15 +605,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -585,15 +680,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -607,7 +702,7 @@ public class RotaryServiceTest {
      * </pre>
      */
     @Test
-    public void testNudgeTo_nudgeToNudgeShortcut() {
+    public void testNudgeTo_nudgeToNudgeShortcut_legacy() {
         initActivity(R.layout.rotary_service_test_2_activity);
 
         AccessibilityNodeInfo appRoot = createNode("app_root");
@@ -626,8 +721,8 @@ public class RotaryServiceTest {
         mRotaryService.setFocusedNode(appButton1Node);
 
         mRotaryService.nudgeTo(windows, View.FOCUS_RIGHT);
-        AccessibilityNodeInfo nudgeShortcutNode = createNode("nudge_shortcut");
-        assertThat(mRotaryService.getFocusedNode()).isEqualTo(nudgeShortcutNode);
+        AccessibilityNodeInfo nudgeShortcut1Node = createNode("nudge_shortcut1");
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(nudgeShortcut1Node);
     }
 
     /**
@@ -649,15 +744,79 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
+     *
+     *      ===========focus area 3===========
+     *      =                                =
+     *      =  .............  .............  =
+     *      =  .           .  .           .  =
+     *      =  .app button3.  .  default  .  =
+     *      =  .           .  .   focus   .  =
+     *      =  .............  .............  =
+     *      =                                =
+     *      ==================================
+     * </pre>
+     */
+    @Test
+    public void testNudgeTo_nudgeToNudgeShortcut_new() {
+        initActivity(R.layout.rotary_service_test_2_activity);
+
+        AccessibilityNodeInfo appRoot = createNode("app_root");
+        AccessibilityWindowInfo appWindow = new WindowBuilder()
+                .setRoot(appRoot)
+                .build();
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(appWindow);
+
+        Activity activity = mActivityRule.getActivity();
+        Button appButton2 = activity.findViewById(R.id.app_button2);
+        appButton2.post(() -> appButton2.requestFocus());
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        assertThat(appButton2.isFocused()).isTrue();
+        AccessibilityNodeInfo appButton2Node = createNode("app_button2");
+        mRotaryService.setFocusedNode(appButton2Node);
+
+        mRotaryService.nudgeTo(windows, View.FOCUS_RIGHT);
+        AccessibilityNodeInfo nudgeShortcut2Node = createNode("nudge_shortcut2");
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(nudgeShortcut2Node);
+    }
+
+    /**
+     * Tests {@link RotaryService#nudgeTo(List, int)} in the following view tree:
+     * <pre>
+     *      The HUN window:
+     *
+     *      HUN FocusParkingView
+     *      ==========HUN focus area==========
+     *      =                                =
+     *      =  .............  .............  =
+     *      =  .           .  .           .  =
+     *      =  .hun button1.  .hun button2.  =
+     *      =  .           .  .           .  =
+     *      =  .............  .............  =
+     *      =                                =
+     *      ==================================
+     *
+     *      The app window:
+     *
+     *      app FocusParkingView
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -713,15 +872,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -783,15 +942,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  . (target)  .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -831,9 +990,9 @@ public class RotaryServiceTest {
                 .thenReturn(AccessibilityNodeInfo.obtain(appFocusArea1Node));
 
         // Nudge up the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent nudgeUpEventActionDown =
-                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SYSTEM_NAVIGATION_UP);
+        new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SYSTEM_NAVIGATION_UP);
         mRotaryService.onKeyEvents(validDisplayId,
                 Collections.singletonList(nudgeUpEventActionDown));
         KeyEvent nudgeUpEventActionUp =
@@ -864,15 +1023,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -910,7 +1069,7 @@ public class RotaryServiceTest {
         assertNull(mRotaryService.getFocusedNode());
 
         // Nudge up the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent nudgeUpEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SYSTEM_NAVIGATION_UP);
         mRotaryService.onKeyEvents(validDisplayId,
@@ -943,15 +1102,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1000,7 +1159,7 @@ public class RotaryServiceTest {
                 .thenReturn(AccessibilityNodeInfo.obtain(appFocusArea3Node));
 
         // Nudge down the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent nudgeEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SYSTEM_NAVIGATION_DOWN);
         mRotaryService.onKeyEvents(validDisplayId, Collections.singletonList(nudgeEventActionDown));
@@ -1032,15 +1191,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1093,7 +1252,7 @@ public class RotaryServiceTest {
                 .thenReturn(AccessibilityNodeInfo.obtain(appFocusArea3Node));
 
         // Nudge down the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent nudgeEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SYSTEM_NAVIGATION_DOWN);
         mRotaryService.onKeyEvents(validDisplayId, Collections.singletonList(nudgeEventActionDown));
@@ -1124,15 +1283,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1162,7 +1321,7 @@ public class RotaryServiceTest {
         assertThat(mRotaryService.getFocusedNode()).isNull();
 
         // Click the center button of the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent centerButtonEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
         mRotaryService.onKeyEvents(validDisplayId,
@@ -1196,15 +1355,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1241,7 +1400,7 @@ public class RotaryServiceTest {
         assertThat(mRotaryService.mIgnoreViewClickedNode).isNull();
 
         // Click the center button of the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent centerButtonEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
         mRotaryService.onKeyEvents(validDisplayId,
@@ -1280,15 +1439,201 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
+     *
+     *      ==============focus area 3==============
+     *      =                                      =
+     *      =  ...................                 =
+     *      =  .     WebView     .  .............  =
+     *      =  .  .............  .  .           .  =
+     *      =  .  .app button3.  .  .  default  .  =
+     *      =  .  . (focused) .  .  .   focus   .  =
+     *      =  .  .............  .  .............  =
+     *      =  ...................                 =
+     *      =                                      =
+     *      ========================================
+     * </pre>
+     */
+    @Test
+    public void testOnKeyEvents_centerButtonClickInAppWindow_webViewFocused_injectEnterKeyEvent() {
+        initActivity(R.layout.rotary_service_test_2_activity);
+
+        AccessibilityNodeInfo appRoot = createNode("app_root");
+        AccessibilityWindowInfo appWindow = new WindowBuilder()
+                .setRoot(appRoot)
+                .setType(TYPE_APPLICATION)
+                .build();
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(appWindow);
+        when(mRotaryService.getWindows()).thenReturn(windows);
+        when(mRotaryService.getRootInActiveWindow())
+                .thenReturn(MockNodeCopierProvider.get().copy(mWindowRoot));
+
+        AccessibilityNodeInfo mockWebViewParent = mNodeBuilder
+                .setClassName(Utils.WEB_VIEW_CLASS_NAME)
+                .setWindow(appWindow)
+                .build();
+
+        AccessibilityNodeInfo mockAppButton3Node = mNodeBuilder
+                .setFocused(true)
+                .setParent(mockWebViewParent)
+                .setWindow(appWindow)
+                .build();
+        mRotaryService.setFocusedNode(mockAppButton3Node);
+
+        assertThat(mRotaryService.mIgnoreViewClickedNode).isNull();
+
+        // Click the center button of the controller.
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
+        KeyEvent centerButtonEventActionDown =
+                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionDown));
+        KeyEvent centerButtonEventActionUp =
+                new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionUp));
+
+        // RotaryService should inject KEYCODE_ENTER event because mockAppButton3Node is in
+        // the application window, its parent is a WebView, and it is not checkable.
+        verify(mRotaryService, times(1))
+                .injectKeyEvent(KeyEvent.KEYCODE_ENTER, KeyEvent.ACTION_DOWN);
+        verify(mRotaryService, times(1))
+                .injectKeyEvent(KeyEvent.KEYCODE_ENTER, KeyEvent.ACTION_UP);
+        assertThat(mRotaryService.mIgnoreViewClickedNode).isEqualTo(mockAppButton3Node);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(mockAppButton3Node);
+    }
+
+    /**
+     * Tests {@link RotaryService#onKeyEvents} in the following view tree:
+     * <pre>
+     *      The HUN window:
+     *
+     *      hun FocusParkingView
+     *      ==========HUN focus area==========
+     *      =                                =
+     *      =  .............  .............  =
+     *      =  .           .  .           .  =
+     *      =  .hun button1.  .hun button2.  =
+     *      =  .           .  .           .  =
+     *      =  .............  .............  =
+     *      =                                =
+     *      ==================================
+     *
+     *      The app window:
+     *
+     *      app FocusParkingView
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
+     *
+     *      ==============focus area 3==============
+     *      =                                      =
+     *      =  ...................                 =
+     *      =  .     WebView     .  .............  =
+     *      =  .  .............  .  .           .  =
+     *      =  .  .app button3.  .  .  default  .  =
+     *      =  .  . (focused) .  .  .   focus   .  =
+     *      =  .  .............  .  .............  =
+     *      =  ...................                 =
+     *      =                                      =
+     *      ========================================
+     * </pre>
+     */
+    @Test
+    public void
+    testOnKeyEvents_centerButtonClickInAppWindow_webViewFocused_isCheckable_injectSpaceKeyEvent() {
+        initActivity(R.layout.rotary_service_test_2_activity);
+
+        AccessibilityNodeInfo appRoot = createNode("app_root");
+        AccessibilityWindowInfo appWindow = new WindowBuilder()
+                .setRoot(appRoot)
+                .setType(TYPE_APPLICATION)
+                .build();
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(appWindow);
+        when(mRotaryService.getWindows()).thenReturn(windows);
+        when(mRotaryService.getRootInActiveWindow())
+                .thenReturn(MockNodeCopierProvider.get().copy(mWindowRoot));
+
+        AccessibilityNodeInfo mockWebViewParent = mNodeBuilder
+            .setClassName(Utils.WEB_VIEW_CLASS_NAME)
+            .setWindow(appWindow)
+            .build();
+
+        AccessibilityNodeInfo mockAppButton3Node = mNodeBuilder
+                .setFocused(true)
+                .setCheckable(true)
+                .setParent(mockWebViewParent)
+                .setWindow(appWindow)
+                .build();
+        mRotaryService.setFocusedNode(mockAppButton3Node);
+
+        assertThat(mRotaryService.mIgnoreViewClickedNode).isNull();
+
+        // Click the center button of the controller.
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
+        KeyEvent centerButtonEventActionDown =
+                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionDown));
+        KeyEvent centerButtonEventActionUp =
+                new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionUp));
+
+        // RotaryService should inject KEYCODE_SPACE event because mockAppButton3Node is in
+        // the application window, its parent is a WebView, and it is checkable.
+        verify(mRotaryService, times(1))
+                .injectKeyEvent(KeyEvent.KEYCODE_SPACE, KeyEvent.ACTION_DOWN);
+        verify(mRotaryService, times(1))
+                .injectKeyEvent(KeyEvent.KEYCODE_SPACE, KeyEvent.ACTION_UP);
+        assertThat(mRotaryService.mIgnoreViewClickedNode).isEqualTo(mockAppButton3Node);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(mockAppButton3Node);
+    }
+
+    /**
+     * Tests {@link RotaryService#onKeyEvents} in the following view tree:
+     * <pre>
+     *      The HUN window:
+     *
+     *      hun FocusParkingView
+     *      ==========HUN focus area==========
+     *      =                                =
+     *      =  .............  .............  =
+     *      =  .           .  .           .  =
+     *      =  .hun button1.  .hun button2.  =
+     *      =  .           .  .           .  =
+     *      =  .............  .............  =
+     *      =                                =
+     *      ==================================
+     *
+     *      The app window:
+     *
+     *      app FocusParkingView
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1329,7 +1674,7 @@ public class RotaryServiceTest {
         assertThat(mRotaryService.mIgnoreViewClickedNode).isNull();
 
         // Click the center button of the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent centerButtonEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
         mRotaryService.onKeyEvents(validDisplayId,
@@ -1368,15 +1713,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1420,7 +1765,7 @@ public class RotaryServiceTest {
         assertThat(mRotaryService.mIgnoreViewClickedNode).isNull();
 
         // Click the center button of the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent centerButtonEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
         mRotaryService.onKeyEvents(validDisplayId,
@@ -1459,15 +1804,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1522,15 +1867,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1588,15 +1933,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1655,15 +2000,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1744,15 +2089,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1782,7 +2127,7 @@ public class RotaryServiceTest {
         assertThat(appButton3.isSelected()).isFalse();
 
         // Click the center button of the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent centerButtonEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
         mRotaryService.onKeyEvents(validDisplayId,
@@ -1832,15 +2177,15 @@ public class RotaryServiceTest {
      *      The app window:
      *
      *      app FocusParkingView
-     *      ===========focus area 1===========    ============focus area 2===========
-     *      =                                =    =                                 =
-     *      =  .............  .............  =    =  .............                  =
-     *      =  .           .  .           .  =    =  .           .                  =
-     *      =  .app button1.  .   nudge   .  =    =  .app button2.                  =
-     *      =  .           .  .  shortcut .  =    =  .           .                  =
-     *      =  .............  .............  =    =  .............                  =
-     *      =                                =    =                                 =
-     *      ==================================    ===================================
+     *      ===========focus area 1===========    ===========focus area 2===========
+     *      =                                =    =                                =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =  .           .  .           .  =    =  .           .  .           .  =
+     *      =  .app button1.  .   nudge   .  =    =  .app button2.  .   nudge   .  =
+     *      =  .           .  . shortcut1 .  =    =  .           .  . shortcut2 .  =
+     *      =  .............  .............  =    =  .............  .............  =
+     *      =                                =    =                                =
+     *      ==================================    ==================================
      *
      *      ===========focus area 3===========
      *      =                                =
@@ -1870,7 +2215,7 @@ public class RotaryServiceTest {
         assertThat(mRotaryService.mIgnoreViewClickedNode).isNull();
 
         // Click the center button of the controller.
-        int validDisplayId = CarInputManager.TARGET_DISPLAY_TYPE_MAIN;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
         KeyEvent centerButtonEventActionDown =
                 new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
         mRotaryService.onKeyEvents(validDisplayId,
@@ -1931,7 +2276,7 @@ public class RotaryServiceTest {
     private void initActivity(@LayoutRes int layoutResId) {
         mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
         mActivityRule.launchActivity(mIntent);
-        mWindowRoot = sUiAutomoation.getRootInActiveWindow();
+        mWindowRoot = sUiAutomation.getRootInActiveWindow();
     }
 
     /**

@@ -21,6 +21,9 @@ import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 
+import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.BOILERPLATE_CODE;
+import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.DUMP_INFO;
+
 import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.view.Display;
@@ -32,12 +35,13 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
+import com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport;
 import com.android.car.ui.FocusArea;
 import com.android.car.ui.FocusParkingView;
+import com.android.internal.util.dump.DualDumpOutputStream;
 
-import java.io.FileDescriptor;
-import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.Predicate;
@@ -67,17 +71,20 @@ class Navigator {
     @NonNull
     private final Rect mAppWindowBounds;
 
+    private final String[] mExcludedOverlayWindowTitles;
+
     Navigator(int displayWidth, int displayHeight, int hunLeft, int hunRight,
-            boolean showHunOnBottom) {
+            boolean showHunOnBottom, String[] excludedOverlayWindowTitles) {
         mHunLeft = hunLeft;
         mHunRight = hunRight;
         mHunNudgeDirection = showHunOnBottom ? View.FOCUS_DOWN : View.FOCUS_UP;
         mAppWindowBounds = new Rect(0, 0, displayWidth, displayHeight);
+        mExcludedOverlayWindowTitles = excludedOverlayWindowTitles;
     }
 
     @VisibleForTesting
     Navigator() {
-        this(0, 0, 0, 0, false);
+        this(0, 0, 0, 0, false, null);
     }
 
     /** Initializes the package name of the host app. */
@@ -405,27 +412,57 @@ class Navigator {
             }
         }
 
-        // Add candidate focus areas in other windows in the given direction.
-        List<AccessibilityWindowInfo> candidateWindows = new ArrayList<>();
-        boolean isSourceNodeEditable = sourceNode.isEditable();
-        addWindowsInDirection(windows, currentWindow, candidateWindows, direction,
-                isSourceNodeEditable);
-        currentWindow.recycle();
-        for (AccessibilityWindowInfo window : candidateWindows) {
-            List<AccessibilityNodeInfo> focusAreasInAnotherWindow = findFocusAreas(window);
-            candidateFocusAreas.addAll(focusAreasInAnotherWindow);
-        }
-
         // Exclude focus areas that have no descendants to take focus, because once we found a best
         // candidate focus area, we don't dig into other ones. If it has no descendants to take
         // focus, the nudge will fail.
         removeEmptyFocusAreas(candidateFocusAreas);
+
+        if (currentWindow.getType() != TYPE_INPUT_METHOD
+                || shouldNudgeOutOfIme(sourceNode, currentFocusArea, candidateFocusAreas,
+                           direction)) {
+            // Add candidate focus areas in other windows in the given direction.
+            List<AccessibilityWindowInfo> candidateWindows = new ArrayList<>();
+            boolean isSourceNodeEditable = sourceNode.isEditable();
+            addWindowsInDirection(windows, currentWindow, candidateWindows, direction,
+                    isSourceNodeEditable);
+            currentWindow.recycle();
+            for (AccessibilityWindowInfo window : candidateWindows) {
+                List<AccessibilityNodeInfo> focusAreasInAnotherWindow = findFocusAreas(window);
+                candidateFocusAreas.addAll(focusAreasInAnotherWindow);
+            }
+
+            // Exclude focus areas that have no descendants to take focus, because once we found a
+            // best candidate focus area, we don't dig into other ones. If it has no descendants to
+            // take focus, the nudge will fail.
+            removeEmptyFocusAreas(candidateFocusAreas);
+        }
 
         // Choose the best candidate as our target focus area.
         AccessibilityNodeInfo targetFocusArea =
                 chooseBestNudgeCandidate(sourceNode, candidateFocusAreas, direction);
         Utils.recycleNodes(candidateFocusAreas);
         return targetFocusArea;
+    }
+
+    /**
+     * Returns whether it should nudge out the IME window. If the current window is IME window and
+     * there are candidate FocusAreas in it for the given direction, it shouldn't nudge out of the
+     * IME window.
+     */
+    private boolean shouldNudgeOutOfIme(@NonNull AccessibilityNodeInfo sourceNode,
+            @NonNull AccessibilityNodeInfo currentFocusArea,
+            @NonNull List<AccessibilityNodeInfo> focusAreasInCurrentWindow,
+            int direction) {
+        if (!focusAreasInCurrentWindow.isEmpty()) {
+            Rect sourceBounds = Utils.getBoundsInScreen(sourceNode);
+            Rect sourceFocusAreaBounds = Utils.getBoundsInScreen(currentFocusArea);
+            for (AccessibilityNodeInfo candidate : focusAreasInCurrentWindow) {
+                if (isCandidate(sourceBounds, sourceFocusAreaBounds, candidate, direction)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private void removeEmptyFocusAreas(@NonNull List<AccessibilityNodeInfo> focusAreas) {
@@ -477,11 +514,11 @@ class Navigator {
         // than the display, then it's an overlay window (such as a Dialog window). Nudging out of
         // the overlay window is not allowed unless the source node is editable and the target
         // window is an IME window (e.g., nudging from the EditText in the Dialog to the IME is
-        // allowed, while nudging from the Button in the Dialog to the IME is not allowed). Windows
-        // for ActivityViews are on virtual displays so they won't be considered overlay windows.
+        // allowed, while nudging from the Button in the Dialog to the IME is not allowed).
         boolean isSourceWindowOverlayWindow = source.getType() == TYPE_APPLICATION
                 && source.getDisplayId() == Display.DEFAULT_DISPLAY
-                && !mAppWindowBounds.equals(sourceBounds);
+                && !mAppWindowBounds.equals(sourceBounds)
+                && !isOverlayWindowExcluded(source);
         Rect destBounds = new Rect();
         for (AccessibilityWindowInfo window : windows) {
             if (window.equals(source)) {
@@ -499,6 +536,19 @@ class Navigator {
                 results.add(window);
             }
         }
+    }
+
+    private boolean isOverlayWindowExcluded(AccessibilityWindowInfo window) {
+        // TODO(b/185399833): Add an explicit API to check for special windows like TaskView.
+        if (mExcludedOverlayWindowTitles == null) {
+            return false;
+        }
+        CharSequence title = window.getTitle();
+        if (title == null) {
+            return false;
+        }
+        String titleString = title.toString();
+        return Arrays.stream(mExcludedOverlayWindowTitles).anyMatch(titleString::equals);
     }
 
     /**
@@ -896,15 +946,22 @@ class Navigator {
                 });
     }
 
-    void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
-        writer.println("  hunLeft: " + mHunLeft + ", right: " + mHunRight);
-        writer.println("  hunNudgeDirection: " + directionToString(mHunNudgeDirection));
-        writer.println("  appWindowBounds: " + mAppWindowBounds);
-
-        writer.println("  surfaceViewHelper:");
-        mSurfaceViewHelper.dump(fd, writer, args);
+    @ExcludeFromCodeCoverageGeneratedReport(reason = DUMP_INFO)
+    void dump(@NonNull DualDumpOutputStream dumpOutputStream, boolean dumpAsProto,
+            @NonNull String fieldName, long fieldId) {
+        long fieldToken = dumpOutputStream.start(fieldName, fieldId);
+        dumpOutputStream.write("hunLeft", RotaryProtos.Navigator.HUN_LEFT, mHunLeft);
+        dumpOutputStream.write("hunRight", RotaryProtos.Navigator.HUN_RIGHT, mHunRight);
+        DumpUtils.writeFocusDirection(dumpOutputStream, dumpAsProto, "hunNudgeDirection",
+                RotaryProtos.Navigator.HUN_NUDGE_DIRECTION, mHunNudgeDirection);
+        DumpUtils.writeRect(dumpOutputStream, mAppWindowBounds, "appWindowBounds",
+                RotaryProtos.Navigator.APP_WINDOW_BOUNDS);
+        mSurfaceViewHelper.dump(dumpOutputStream, dumpAsProto, "surfaceViewHelper",
+                RotaryProtos.Navigator.SURFACE_VIEW_HELPER);
+        dumpOutputStream.end(fieldToken);
     }
 
+    @ExcludeFromCodeCoverageGeneratedReport(reason = BOILERPLATE_CODE)
     static String directionToString(@View.FocusRealDirection int direction) {
         switch (direction) {
             case View.FOCUS_UP:
