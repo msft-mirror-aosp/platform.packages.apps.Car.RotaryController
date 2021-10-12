@@ -16,6 +16,8 @@
 
 package com.android.car.rotary;
 
+import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.DUMP_INFO;
+
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -26,8 +28,9 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
-import java.io.FileDescriptor;
-import java.io.PrintWriter;
+import com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport;
+import com.android.internal.util.dump.DualDumpOutputStream;
+
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -93,8 +96,14 @@ class SurfaceViewHelper {
         return mClientApps.contains(node.getPackageName());
     }
 
-    public void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
-        writer.println("    hostApp: " + mHostApp);
-        writer.println("    clientApps: " + mClientApps);
+    @ExcludeFromCodeCoverageGeneratedReport(reason = DUMP_INFO)
+    void dump(@NonNull DualDumpOutputStream dumpOutputStream, boolean dumpAsProto,
+            @NonNull String fieldName, long fieldId) {
+        long fieldToken = dumpOutputStream.start(fieldName, fieldId);
+        dumpOutputStream.write("hostApp", RotaryProtos.SurfaceViewHelper.HOST_APP, mHostApp);
+        DumpUtils.writeCharSequences(dumpOutputStream, dumpAsProto, "clientApps",
+                RotaryProtos.SurfaceViewHelper.CLIENT_APPS, mClientApps);
+        dumpOutputStream.end(fieldToken);
     }
+
 }
