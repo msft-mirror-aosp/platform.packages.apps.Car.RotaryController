@@ -104,6 +104,8 @@ class NodeBuilder {
     /** The extras of this node. */
     @NonNull
     private Bundle mExtras = new Bundle();
+    /** Whether this node is checkable. */
+    private boolean mCheckable = false;
 
     NodeBuilder(@NonNull List<AccessibilityNodeInfo> nodeList) {
         mNodeList = nodeList;
@@ -115,28 +117,27 @@ class NodeBuilder {
         AccessibilityNodeInfo node = mock(AccessibilityNodeInfo.class);
         when(node.getWindow()).thenReturn(builder.mWindow);
         when(node.getWindowId()).thenReturn(builder.mWindowId);
-        when(node.getParent()).thenReturn(
-                // In Navigator, nodes will be recycled once they're no longer used. When a real
-                // node is recycled, it can't be used again, such as performing an action, otherwise
-                // it will cause the "Cannot perform this action on a not sealed instance"
-                // exception. If the mock getParent() always returns the same instance and
-                // mParent is a real node, it might cause the exception when getParent() is called
-                // multiple on the same mock node.
-                // To fix it, this method returns a different instance each time it's called.
-                // Note: if this method is called too many times and triggers the "Exceeded the
-                // maximum calls", please add more parameters.
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent),
-                MockNodeCopierProvider.get().copy(builder.mParent))
-                .thenThrow(new RuntimeException("Exceeded the maximum calls"));
+        if (builder.mParent == null || isMock(builder.mParent)) {
+            when(node.getParent()).thenReturn(MockNodeCopierProvider.get().copy(builder.mParent));
+        } else {
+            when(node.getParent()).thenReturn(
+                    // In Navigator, nodes will be recycled once they're no longer used. When a real
+                    // node is recycled, it can't be used again, such as performing an action,
+                    // otherwise it will cause the "Cannot perform this action on a not sealed
+                    // instance" exception. If mParent is a real node and the mock getParent()
+                    // always returns the same instance , it might cause the exception when
+                    // getParent() is called multiple on the same mock node.
+                    // To fix it, this method returns a different instance each time it's called.
+                    // Note: if this method is called too many times and triggers the "Exceeded the
+                    // maximum calls", please add more parameters.
+                    MockNodeCopierProvider.get().copy(builder.mParent),
+                    MockNodeCopierProvider.get().copy(builder.mParent),
+                    MockNodeCopierProvider.get().copy(builder.mParent),
+                    MockNodeCopierProvider.get().copy(builder.mParent),
+                    MockNodeCopierProvider.get().copy(builder.mParent),
+                    MockNodeCopierProvider.get().copy(builder.mParent))
+                    .thenThrow(new RuntimeException("Exceeded the maximum calls"));
+        }
         // There is no need to mock getChildCount() or getChild() if mParent is null or a real node.
         if (builder.mParent != null && isMock(builder.mParent)) {
             // Mock AccessibilityNodeInfo#getChildCount().
@@ -201,6 +202,7 @@ class NodeBuilder {
         when(node.getStateDescription()).thenReturn(builder.mStateDescription);
         when(node.getActionList()).thenReturn(builder.mActionList);
         when(node.getExtras()).thenReturn(builder.mExtras);
+        when(node.isCheckable()).thenReturn(builder.mCheckable);
         builder.mNodeList.add(node);
         return node;
     }
@@ -315,6 +317,11 @@ class NodeBuilder {
         return setContentDescription(ROTARY_CONTAINER);
     }
 
+    NodeBuilder setCheckable(boolean checkable) {
+        mCheckable = checkable;
+        return this;
+    }
+
     /**
      * Creates a copy of the current NodeBuilder, and clears the states of the current NodeBuilder
      * except for {@link #mNodeList}.
@@ -339,6 +346,7 @@ class NodeBuilder {
         copy.mStateDescription = mStateDescription;
         copy.mActionList = mActionList;
         copy.mExtras = mExtras;
+        copy.mCheckable = mCheckable;
         // Clear the states so that it doesn't infect the next NodeBuilder we create.
         mWindow = null;
         mWindowId = UNDEFINED_WINDOW_ID;
@@ -357,6 +365,7 @@ class NodeBuilder {
         mStateDescription = null;
         mActionList = new ArrayList<>();
         mExtras = new Bundle();
+        mCheckable = false;
         return copy;
     }
 }
