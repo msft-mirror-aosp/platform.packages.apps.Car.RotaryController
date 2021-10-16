@@ -19,6 +19,8 @@ import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATIO
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM;
 
+import static com.android.car.ui.utils.RotaryConstants.ROTARY_VERTICALLY_SCROLLABLE;
+
 import static com.google.common.truth.Truth.assertThat;
 
 import android.app.Activity;
@@ -258,12 +260,11 @@ public class NavigatorTest {
                 R.layout.navigator_find_rotate_target_does_not_skip_offscreen_node_test_activity);
 
         Activity activity = mActivityRule.getActivity();
-        CarUiRecyclerView scrollable = activity.findViewById(R.id.scrollable);
-        RecyclerView recyclerView = scrollable.getRecyclerView();
-        recyclerView.post(() -> {
+        CarUiRecyclerView carUiRecyclerView = activity.findViewById(R.id.scrollable);
+        carUiRecyclerView.post(() -> {
             TestRecyclerViewAdapter adapter = new TestRecyclerViewAdapter(activity, 3);
             adapter.setItemsFocusable(true);
-            recyclerView.setAdapter(adapter);
+            carUiRecyclerView.setAdapter(adapter);
         });
 
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
@@ -854,15 +855,15 @@ public class NavigatorTest {
     public void test_findNudgeTargetFocusArea_fromScrollableContainer() {
         initActivity(R.layout.navigator_find_nudge_target_focus_area_1_test_activity);
         Activity activity = mActivityRule.getActivity();
-        CarUiRecyclerView scrollable = activity.findViewById(R.id.scrollable_container);
-        RecyclerView recyclerView = scrollable.getRecyclerView();
-        recyclerView.post(() -> {
+        CarUiRecyclerView carUiRecyclerView = activity.findViewById(R.id.scrollable_container);
+        carUiRecyclerView.post(() -> {
             TestRecyclerViewAdapter adapter = new TestRecyclerViewAdapter(activity, 20);
-            recyclerView.setAdapter(adapter);
-            recyclerView.requestFocus();
+            carUiRecyclerView.setAdapter(adapter);
+            carUiRecyclerView.getView().requestFocus();
         });
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        assertThat(recyclerView.isFocused()).isEqualTo(true);
+        View focusedView = carUiRecyclerView.getView().findFocus();
+        assertThat(focusedView.getContentDescription()).isEqualTo(ROTARY_VERTICALLY_SCROLLABLE);
 
         AccessibilityNodeInfo currentFocusArea = createNode("focus_area1");
 
