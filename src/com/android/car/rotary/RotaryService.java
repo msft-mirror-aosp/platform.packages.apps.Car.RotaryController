@@ -51,6 +51,7 @@ import static com.android.car.ui.utils.RotaryConstants.ACTION_DISMISS_POPUP_WIND
 import static com.android.car.ui.utils.RotaryConstants.ACTION_HIDE_IME;
 import static com.android.car.ui.utils.RotaryConstants.ACTION_NUDGE_SHORTCUT;
 import static com.android.car.ui.utils.RotaryConstants.ACTION_NUDGE_TO_ANOTHER_FOCUS_AREA;
+import static com.android.car.ui.utils.RotaryConstants.ACTION_QUERY_NUDGE_DISABLED;
 import static com.android.car.ui.utils.RotaryConstants.ACTION_RESTORE_DEFAULT_FOCUS;
 import static com.android.car.ui.utils.RotaryConstants.NUDGE_DIRECTION;
 
@@ -1597,7 +1598,17 @@ public class RotaryService extends AccessibilityService implements
             return;
         }
 
-        // No shortcut node, so move the focus in the given direction.
+        // No shortcut node, so check whether nudge is disabled for the given direction. If
+        // disabled and there is an off-screen nudge action, execute it.
+        arguments.clear();
+        arguments.putInt(NUDGE_DIRECTION, direction);
+        if (mFocusArea.performAction(ACTION_QUERY_NUDGE_DISABLED, arguments)) {
+            L.d("Nudging in " + direction + " is disabled for this focus area: " + mFocusArea);
+            handleOffScreenNudge(direction);
+            return;
+        }
+
+        // No shortcut node and nudge is not disabled, so move the focus in the given direction.
         // First, try to perform ACTION_NUDGE on mFocusArea to nudge to another FocusArea.
         arguments.clear();
         arguments.putInt(NUDGE_DIRECTION, direction);
