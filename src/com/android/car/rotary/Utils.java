@@ -18,13 +18,17 @@ package com.android.car.rotary;
 
 import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
 
+import static com.android.car.ui.utils.RotaryConstants.BOTTOM_BOUND_OFFSET_FOR_NUDGE;
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_BOTTOM_BOUND_OFFSET;
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_LEFT_BOUND_OFFSET;
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_RIGHT_BOUND_OFFSET;
 import static com.android.car.ui.utils.RotaryConstants.FOCUS_AREA_TOP_BOUND_OFFSET;
+import static com.android.car.ui.utils.RotaryConstants.LEFT_BOUND_OFFSET_FOR_NUDGE;
+import static com.android.car.ui.utils.RotaryConstants.RIGHT_BOUND_OFFSET_FOR_NUDGE;
 import static com.android.car.ui.utils.RotaryConstants.ROTARY_CONTAINER;
 import static com.android.car.ui.utils.RotaryConstants.ROTARY_HORIZONTALLY_SCROLLABLE;
 import static com.android.car.ui.utils.RotaryConstants.ROTARY_VERTICALLY_SCROLLABLE;
+import static com.android.car.ui.utils.RotaryConstants.TOP_BOUND_OFFSET_FOR_NUDGE;
 
 import android.graphics.Rect;
 import android.os.Bundle;
@@ -64,6 +68,8 @@ final class Utils {
 
     @VisibleForTesting
     static final String WEB_VIEW_CLASS_NAME = WebView.class.getName();
+    @VisibleForTesting
+    static final String COMPOSE_VIEW_CLASS_NAME = "androidx.compose.ui.platform.ComposeView";
     @VisibleForTesting
     static final String SURFACE_VIEW_CLASS_NAME = SurfaceView.class.getName();
 
@@ -138,6 +144,11 @@ final class Utils {
         // are always empty for views that are off screen.
         Rect bounds = new Rect();
         node.getBoundsInParent(bounds);
+        if (bounds.isEmpty()) {
+            // Some nodes, such as those in ComposeView hierarchies may not set bounds in parents,
+            // since the APIs are deprecated. So, check bounds in screen just in case.
+            node.getBoundsInScreen(bounds);
+        }
         return !bounds.isEmpty();
     }
 
@@ -259,6 +270,21 @@ final class Utils {
         return className != null && WEB_VIEW_CLASS_NAME.contentEquals(className);
     }
 
+    /**
+     * Returns whether {@code node} represents a {@code ComposeView}.
+     * <p>
+     * The descendants of a node representing a {@code ComposeView} represent "Composables" rather
+     * than {@link android.view.View}s so {@link AccessibilityNodeInfo#focusSearch} currently does
+     * not work for these nodes. The outcome of b/192274274 could change this.
+     *
+     * TODO(b/192274274): This method is only necessary until {@code ComposeView} supports
+     *  {@link AccessibilityNodeInfo#focusSearch(int)}.
+     */
+    static boolean isComposeView(@NonNull AccessibilityNodeInfo node) {
+        CharSequence className = node.getClassName();
+        return className != null && COMPOSE_VIEW_CLASS_NAME.contentEquals(className);
+    }
+
     /** Returns whether the given {@code node} represents a {@link SurfaceView}. */
     static boolean isSurfaceView(@NonNull AccessibilityNodeInfo node) {
         CharSequence className = node.getClassName();
@@ -356,6 +382,14 @@ final class Utils {
             bounds.right -= bundle.getInt(FOCUS_AREA_RIGHT_BOUND_OFFSET);
             bounds.top += bundle.getInt(FOCUS_AREA_TOP_BOUND_OFFSET);
             bounds.bottom -= bundle.getInt(FOCUS_AREA_BOTTOM_BOUND_OFFSET);
+        } else if (node.hasExtras()) {
+            // For a view that overrides nudge bounds, the bounds used for finding the nudge target
+            // are its View bounds plus/minus the offset.
+            Bundle bundle = node.getExtras();
+            bounds.left += bundle.getInt(LEFT_BOUND_OFFSET_FOR_NUDGE);
+            bounds.right -= bundle.getInt(RIGHT_BOUND_OFFSET_FOR_NUDGE);
+            bounds.top += bundle.getInt(TOP_BOUND_OFFSET_FOR_NUDGE);
+            bounds.bottom -= bundle.getInt(BOTTOM_BOUND_OFFSET_FOR_NUDGE);
         } else if (Utils.isRotaryContainer(node)) {
             // For a rotary container, the bounds used for finding the nudge target are the
             // intersection of the two bounds: (1) minimum bounds containing its children, and
