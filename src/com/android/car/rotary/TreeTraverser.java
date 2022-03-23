@@ -164,7 +164,7 @@ class TreeTraverser {
         }
     }
 
-    /** Sets a NodeCopier instance for testing. */
+    /** Sets a node copier for testing. */
     @VisibleForTesting
     void setNodeCopier(@NonNull NodeCopier nodeCopier) {
         mNodeCopier = nodeCopier;

@@ -15,7 +15,6 @@
  */
 package com.android.car.rotary;
 
-import static android.app.ActivityTaskManager.INVALID_TASK_ID;
 import static android.view.accessibility.AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
 
 import static org.mockito.Mockito.any;
@@ -43,19 +42,13 @@ class WindowBuilder {
     private Rect mBoundsInScreen;
     /** The window type, if specified. */
     private int mType;
-    /** Whether the window is focused. */
-    private boolean mFocused = false;
     /** The display ID, if specified. */
     private int mDisplayId = Display.DEFAULT_DISPLAY;
-    /** The task ID, if specified. */
-    private int mTaskId = INVALID_TASK_ID;
 
     AccessibilityWindowInfo build() {
         AccessibilityWindowInfo window = mock(AccessibilityWindowInfo.class);
         when(window.getId()).thenReturn(mId);
         when(window.getRoot())
-                .thenReturn(MockNodeCopierProvider.get().copy(mRoot))
-                .thenReturn(MockNodeCopierProvider.get().copy(mRoot))
                 .thenReturn(MockNodeCopierProvider.get().copy(mRoot))
                 .thenReturn(MockNodeCopierProvider.get().copy(mRoot))
                 .thenReturn(MockNodeCopierProvider.get().copy(mRoot))
@@ -71,9 +64,7 @@ class WindowBuilder {
             }).when(window).getBoundsInScreen(any(Rect.class));
         }
         when(window.getType()).thenReturn(mType);
-        when(window.isFocused()).thenReturn(mFocused);
         when(window.getDisplayId()).thenReturn(mDisplayId);
-        when(window.getTaskId()).thenReturn(mTaskId);
         return window;
     }
 
@@ -97,18 +88,8 @@ class WindowBuilder {
         return this;
     }
 
-    WindowBuilder setFocused(boolean isFocused) {
-        mFocused = isFocused;
-        return this;
-    }
-
     WindowBuilder setDisplayId(int displayId) {
         mDisplayId = displayId;
-        return this;
-    }
-
-    WindowBuilder setTaskId(int taskId) {
-        mTaskId = taskId;
         return this;
     }
 }

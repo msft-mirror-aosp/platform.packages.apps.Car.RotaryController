@@ -16,6 +16,8 @@
 
 package com.android.car.rotary;
 
+import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.DUMP_INFO;
+
 import android.content.ComponentName;
 import android.graphics.Rect;
 import android.view.KeyEvent;
@@ -26,6 +28,7 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport;
 import com.android.internal.util.dump.DualDumpOutputStream;
 
 import java.util.Arrays;
@@ -33,6 +36,7 @@ import java.util.Collection;
 import java.util.Map;
 
 /** Utility methods for dumpsys. */
+@ExcludeFromCodeCoverageGeneratedReport(reason = DUMP_INFO)
 final class DumpUtils {
     private DumpUtils() {}
 
@@ -78,26 +82,26 @@ final class DumpUtils {
     /** Writes {@code afterScrollAction} to a dump in text or proto format. */
     static void writeAfterScrollAction(@NonNull DualDumpOutputStream dumpOutputStream,
             boolean dumpAsProto, @NonNull String fieldName, long fieldId,
-            @RotaryService.AfterScrollAction int afterScrollAction) {
+            RotaryService.AfterScrollAction afterScrollAction) {
         if (!dumpAsProto) {
-            dumpOutputStream.write(fieldName, fieldId, afterScrollAction);
+            dumpOutputStream.write(fieldName, fieldId, afterScrollAction.name());
             return;
         }
         int val;
         switch (afterScrollAction) {
-            case RotaryService.NONE:
+            case NONE:
                 val = RotaryProtos.AFTER_SCROLL_DO_NOTHING;
                 break;
-            case RotaryService.FOCUS_PREVIOUS:
+            case FOCUS_PREVIOUS:
                 val = RotaryProtos.AFTER_SCROLL_FOCUS_PREVIOUS;
                 break;
-            case RotaryService.FOCUS_NEXT:
+            case FOCUS_NEXT:
                 val = RotaryProtos.AFTER_SCROLL_FOCUS_NEXT;
                 break;
-            case RotaryService.FOCUS_FIRST:
+            case FOCUS_FIRST:
                 val = RotaryProtos.AFTER_SCROLL_FOCUS_FIRST;
                 break;
-            case RotaryService.FOCUS_LAST:
+            case FOCUS_LAST:
                 val = RotaryProtos.AFTER_SCROLL_FOCUS_LAST;
                 break;
             default:
