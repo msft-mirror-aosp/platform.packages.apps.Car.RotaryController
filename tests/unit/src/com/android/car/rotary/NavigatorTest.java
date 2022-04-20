@@ -98,11 +98,11 @@ public class NavigatorTest {
         mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
         mDisplayBounds = new Rect(0, 0, 1080, 920);
         mHunWindowBounds = new Rect(50, 10, 950, 200);
-        // The values of displayWidth and displayHeight don't affect the test, so just use 0.
-        mNavigator = new Navigator(/* displayWidth= */ 0,
-                /* displayHeight= */ 0,
-                mHunWindowBounds.left,
-                mHunWindowBounds.right,
+        // The values of displayWidth and displayHeight affects testFindNudgeTargetFocusArea5
+        mNavigator = new Navigator(/* displayWidth= */ mDisplayBounds.right,
+                /* displayHeight= */ mDisplayBounds.bottom,
+                /* hun left */ mHunWindowBounds.left,
+                /* hun right */ mHunWindowBounds.right,
                 /* showHunOnBottom= */ false);
         mNavigator.setNodeCopier(MockNodeCopierProvider.get());
         mNodeBuilder = new NodeBuilder(new ArrayList<>());
