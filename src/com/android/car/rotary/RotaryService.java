@@ -58,6 +58,7 @@ import static com.android.car.ui.utils.RotaryConstants.NUDGE_DIRECTION;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.annotation.IntDef;
 import android.car.Car;
 import android.car.CarOccupantZoneManager;
 import android.car.input.CarInputManager;
@@ -114,6 +115,8 @@ import com.android.internal.util.dump.DualDumpOutputStream;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.PrintWriter;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -385,26 +388,34 @@ public class RotaryService extends AccessibilityService implements
      * Possible actions to do after receiving {@link AccessibilityEvent#TYPE_VIEW_SCROLLED}.
      *
      * @see #injectScrollEvent
-     * TODO(b/185154771): Replace with #IntDef
      */
-    enum AfterScrollAction {
-        /** Do nothing. */
-        NONE,
-        /**
-         * Focus the view before the focused view in Tab order in the scrollable container, if any.
-         */
-        FOCUS_PREVIOUS,
-        /**
-         * Focus the view after the focused view in Tab order in the scrollable container, if any.
-         */
-        FOCUS_NEXT,
-        /** Focus the first view in the scrollable container, if any. */
-        FOCUS_FIRST,
-        /** Focus the last view in the scrollable container, if any. */
-        FOCUS_LAST,
-    }
 
-    private AfterScrollAction mAfterScrollAction = AfterScrollAction.NONE;
+    /** Do nothing. */
+    public static final int NONE = 1;
+
+    /** Focus the view before the focused view in Tab order in the scrollable container, if any. */
+    public static final int FOCUS_PREVIOUS = 2;
+
+    /** Focus the view after the focused view in Tab order in the scrollable container, if any. */
+    public static final int FOCUS_NEXT = 3;
+
+    /** Focus the first view in the scrollable container, if any. */
+    public static final int FOCUS_FIRST = 4;
+
+    /** Focus the last view in the scrollable container, if any. */
+    public static final int FOCUS_LAST = 5;
+
+    @IntDef(prefix = "AFTER_SCROLL_ACTION_", value = {
+        NONE,
+        FOCUS_PREVIOUS,
+        FOCUS_NEXT,
+        FOCUS_FIRST,
+        FOCUS_LAST
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    @interface AfterScrollAction {}
+
+    private int mAfterScrollAction = NONE;
 
     /**
      * How many milliseconds to wait for a {@link AccessibilityEvent#TYPE_VIEW_SCROLLED} event after
@@ -526,57 +537,6 @@ public class RotaryService extends AccessibilityService implements
         NAVIGATION_KEYCODE_TO_DPAD_KEYCODE_MAP = Collections.unmodifiableMap(map);
     }
 
-    private final BroadcastReceiver mHomeButtonReceiver = new BroadcastReceiver() {
-        // Should match the values in PhoneWindowManager.java
-        private static final String SYSTEM_DIALOG_REASON_KEY = "reason";
-        private static final String SYSTEM_DIALOG_REASON_HOME_KEY = "homekey";
-
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            String reason = intent.getStringExtra(SYSTEM_DIALOG_REASON_KEY);
-            if (!SYSTEM_DIALOG_REASON_HOME_KEY.equals(reason)) {
-                L.d("Skipping the processing of ACTION_CLOSE_SYSTEM_DIALOGS broadcast event due "
-                        + "to reason: " + reason);
-                return;
-            }
-
-            // Trigger a back action in order to exit direct manipulation mode.
-            if (mInDirectManipulationMode) {
-                handleBackButtonEvent(ACTION_DOWN);
-                handleBackButtonEvent(ACTION_UP);
-            }
-
-            List<AccessibilityWindowInfo> windows = getWindows();
-            for (AccessibilityWindowInfo window : windows) {
-                if (window == null) {
-                    continue;
-                }
-
-                if (mInRotaryMode && mNavigator.isMainApplicationWindow(window)) {
-                    // Post this in a handler so that there is no race condition between app
-                    // transitions and restoration of focus.
-                    getMainThreadHandler().post(() -> {
-                        boolean success = restoreDefaultFocusInWindow(window);
-                        if (!success) {
-                            L.e("Failed to focus the default element in the application window");
-                        }
-                        window.recycle();
-                    });
-                } else {
-                    // Post this in a handler so that there is no race condition between app
-                    // transitions and restoration of focus.
-                    getMainThreadHandler().post(() -> {
-                        boolean success = clearFocusInWindow(window);
-                        if (!success) {
-                            L.e("Failed to clear the focus in window: " + window);
-                        }
-                        window.recycle();
-                    });
-                }
-            }
-        }
-    };
-
     private Car mCar;
     private CarInputManager mCarInputManager;
     private InputManager mInputManager;
@@ -691,9 +651,6 @@ public class RotaryService extends AccessibilityService implements
 
         mProjectedApps = Arrays.asList(res.getStringArray(R.array.projected_apps));
 
-        getWindowContext().registerReceiver(mHomeButtonReceiver,
-                new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS), Context.RECEIVER_EXPORTED);
-
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_PACKAGE_ADDED);
         filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
@@ -779,7 +736,6 @@ public class RotaryService extends AccessibilityService implements
     public void onDestroy() {
         L.v("onDestroy");
         unregisterReceiver(mAppInstallUninstallReceiver);
-        getWindowContext().unregisterReceiver(mHomeButtonReceiver);
 
         unregisterInputMethodObserver();
         unregisterFilterObserver();
@@ -1261,7 +1217,7 @@ public class RotaryService extends AccessibilityService implements
 
     /** Handles {@link AccessibilityEvent#TYPE_VIEW_SCROLLED} event. */
     private void handleViewScrolledEvent(@Nullable AccessibilityNodeInfo sourceNode) {
-        if (mAfterScrollAction == AfterScrollAction.NONE
+        if (mAfterScrollAction == NONE
                 || SystemClock.uptimeMillis() >= mAfterScrollActionUntil) {
             return;
         }
@@ -1276,18 +1232,18 @@ public class RotaryService extends AccessibilityService implements
                 }
                 AccessibilityNodeInfo target = mNavigator.findFocusableDescendantInDirection(
                         sourceNode, mFocusedNode,
-                        mAfterScrollAction == AfterScrollAction.FOCUS_PREVIOUS
+                        mAfterScrollAction == FOCUS_PREVIOUS
                                 ? View.FOCUS_BACKWARD
                                 : View.FOCUS_FORWARD);
                 if (target == null) {
                     break;
                 }
                 L.d("Focusing "
-                        + (mAfterScrollAction == AfterScrollAction.FOCUS_PREVIOUS
+                        + (mAfterScrollAction == FOCUS_PREVIOUS
                             ? "previous" : "next")
                         + " after scroll");
                 if (performFocusAction(target)) {
-                    mAfterScrollAction = AfterScrollAction.NONE;
+                    mAfterScrollAction = NONE;
                 }
                 Utils.recycleNode(target);
                 break;
@@ -1295,17 +1251,17 @@ public class RotaryService extends AccessibilityService implements
             case FOCUS_FIRST:
             case FOCUS_LAST: {
                 AccessibilityNodeInfo target =
-                        mAfterScrollAction == AfterScrollAction.FOCUS_FIRST
+                        mAfterScrollAction == FOCUS_FIRST
                                 ? mNavigator.findFirstFocusableDescendant(sourceNode)
                                 : mNavigator.findLastFocusableDescendant(sourceNode);
                 if (target == null) {
                     break;
                 }
                 L.d("Focusing "
-                        + (mAfterScrollAction == AfterScrollAction.FOCUS_FIRST ? "first" : "last")
+                        + (mAfterScrollAction == FOCUS_FIRST ? "first" : "last")
                         + " after scroll");
                 if (performFocusAction(target)) {
-                    mAfterScrollAction = AfterScrollAction.NONE;
+                    mAfterScrollAction = NONE;
                 }
                 Utils.recycleNode(target);
                 break;
@@ -2165,19 +2121,19 @@ public class RotaryService extends AccessibilityService implements
         if (rotationCount > 1) {
             // Focus last when quickly scrolling down so the next event scrolls.
             mAfterScrollAction = clockwise
-                    ? AfterScrollAction.FOCUS_LAST
-                    : AfterScrollAction.FOCUS_FIRST;
+                    ? FOCUS_LAST
+                    : FOCUS_FIRST;
         } else {
             if (Utils.isScrollableContainer(mFocusedNode)) {
                 // Focus first when scrolling down while no focusable descendants are visible.
                 mAfterScrollAction = clockwise
-                        ? AfterScrollAction.FOCUS_FIRST
-                        : AfterScrollAction.FOCUS_LAST;
+                        ? FOCUS_FIRST
+                        : FOCUS_LAST;
             } else {
                 // Focus next when scrolling down with a focused descendant.
                 mAfterScrollAction = clockwise
-                        ? AfterScrollAction.FOCUS_NEXT
-                        : AfterScrollAction.FOCUS_PREVIOUS;
+                        ? FOCUS_NEXT
+                        : FOCUS_PREVIOUS;
             }
         }
         mAfterScrollActionUntil = SystemClock.uptimeMillis() + mAfterScrollTimeoutMs;
