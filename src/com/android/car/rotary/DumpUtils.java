@@ -78,26 +78,26 @@ final class DumpUtils {
     /** Writes {@code afterScrollAction} to a dump in text or proto format. */
     static void writeAfterScrollAction(@NonNull DualDumpOutputStream dumpOutputStream,
             boolean dumpAsProto, @NonNull String fieldName, long fieldId,
-            RotaryService.AfterScrollAction afterScrollAction) {
+            @RotaryService.AfterScrollAction int afterScrollAction) {
         if (!dumpAsProto) {
-            dumpOutputStream.write(fieldName, fieldId, afterScrollAction.name());
+            dumpOutputStream.write(fieldName, fieldId, afterScrollAction);
             return;
         }
         int val;
         switch (afterScrollAction) {
-            case NONE:
+            case RotaryService.NONE:
                 val = RotaryProtos.AFTER_SCROLL_DO_NOTHING;
                 break;
-            case FOCUS_PREVIOUS:
+            case RotaryService.FOCUS_PREVIOUS:
                 val = RotaryProtos.AFTER_SCROLL_FOCUS_PREVIOUS;
                 break;
-            case FOCUS_NEXT:
+            case RotaryService.FOCUS_NEXT:
                 val = RotaryProtos.AFTER_SCROLL_FOCUS_NEXT;
                 break;
-            case FOCUS_FIRST:
+            case RotaryService.FOCUS_FIRST:
                 val = RotaryProtos.AFTER_SCROLL_FOCUS_FIRST;
                 break;
-            case FOCUS_LAST:
+            case RotaryService.FOCUS_LAST:
                 val = RotaryProtos.AFTER_SCROLL_FOCUS_LAST;
                 break;
             default:
