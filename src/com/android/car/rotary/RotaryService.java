@@ -18,8 +18,6 @@ package com.android.car.rotary;
 import static android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS;
 import static android.car.settings.CarSettings.Secure.KEY_ROTARY_KEY_EVENT_FILTER;
 import static android.provider.Settings.Secure.DEFAULT_INPUT_METHOD;
-import static android.provider.Settings.Secure.DISABLED_SYSTEM_INPUT_METHODS;
-import static android.provider.Settings.Secure.ENABLED_INPUT_METHODS;
 import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.KeyEvent.ACTION_DOWN;
 import static android.view.KeyEvent.ACTION_UP;
@@ -102,6 +100,8 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
+import android.view.inputmethod.InputMethodInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
@@ -563,6 +563,8 @@ public class RotaryService extends AccessibilityService implements
 
     @Nullable private ContentResolver mContentResolver;
 
+    @Nullable private InputMethodManager mInputMethodManager;
+
     private final BroadcastReceiver mAppInstallUninstallReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -619,7 +621,7 @@ public class RotaryService extends AccessibilityService implements
                 mDefaultTouchInputMethod);
         if (mRotaryInputMethod != null
                 && mRotaryInputMethod.equals(getCurrentIme())
-                && isValidIme(mTouchInputMethod)) {
+                && isInstalledIme(mTouchInputMethod)) {
             // Switch from the rotary IME to the touch IME in case Android defaults to the rotary
             // IME.
             // TODO(b/169423887): Figure out how to configure the default IME through Android
@@ -715,6 +717,10 @@ public class RotaryService extends AccessibilityService implements
         updateServiceInfo();
 
         mInputManager = getSystemService(InputManager.class);
+        mInputMethodManager = getSystemService(InputMethodManager.class);
+        if (mInputMethodManager == null) {
+            L.w("Failed to get InputMethodManager");
+        }
 
         // Add an overlay to capture touch events.
         addTouchOverlay();
@@ -2694,7 +2700,7 @@ public class RotaryService extends AccessibilityService implements
     /** Switches to the rotary IME or the touch IME if needed. */
     private void updateIme() {
         String newIme = mInRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
-        if (mInRotaryMode && !isValidIme(newIme)) {
+        if (mInRotaryMode && !isInstalledIme(newIme)) {
             L.w("Rotary IME doesn't exist: " + newIme);
             return;
         }
@@ -2873,38 +2879,23 @@ public class RotaryService extends AccessibilityService implements
         mWindowCache.setNodeCopier(nodeCopier);
     }
 
-    /**
-     * Checks if the {@code componentName} is an enabled input method or a disabled system input
-     * method. The string should be in the format {@code "package.name/.ClassName"}, e.g. {@code
-     * "com.android.inputmethod.latin/.CarLatinIME"}. Disabled system input methods are considered
-     * valid because switching back to the touch IME should occur even if it's disabled and because
-     * the rotary IME may be disabled so that it doesn't get used for touch.
-     */
-    private boolean isValidIme(@Nullable String componentName) {
-        if (TextUtils.isEmpty(componentName)) {
+    /** Checks if the {@code componentName} is an installed input method. */
+    private boolean isInstalledIme(@Nullable String componentName) {
+        if (TextUtils.isEmpty(componentName) || mInputMethodManager == null) {
             return false;
         }
-        return imeSettingContains(ENABLED_INPUT_METHODS, componentName)
-                || imeSettingContains(DISABLED_SYSTEM_INPUT_METHODS, componentName);
-    }
-
-    /**
-     * Fetches the secure setting {@code settingName} containing a colon-separated list of IMEs with
-     * their subtypes and returns whether {@code componentName} is one of the IMEs.
-     */
-    private boolean imeSettingContains(@NonNull String settingName, @NonNull String componentName) {
-        if (mContentResolver == null) {
-            return false;
+        // Use getInputMethodList() to get the installed input methods. Don't do that by fetching
+        // ENABLED_INPUT_METHODS and DISABLED_SYSTEM_INPUT_METHODS from the secure setting,
+        // because RotaryIME may not be included in any of them (b/229144904).
+        ComponentName component = ComponentName.unflattenFromString(componentName);
+        List<InputMethodInfo> imeList = mInputMethodManager.getInputMethodList();
+        for (InputMethodInfo ime : imeList) {
+            ComponentName imeComponent = ime.getComponent();
+            if (component.equals(imeComponent)) {
+                return true;
+            }
         }
-        String colonSeparatedComponentNamesWithSubtypes =
-                Settings.Secure.getString(mContentResolver, settingName);
-        if (colonSeparatedComponentNamesWithSubtypes == null) {
-            return false;
-        }
-        return Arrays.stream(colonSeparatedComponentNamesWithSubtypes.split(":"))
-                .map(componentNameWithSubtypes -> componentNameWithSubtypes.split(";"))
-                .anyMatch(componentNameAndSubtypes -> componentNameAndSubtypes.length >= 1
-                        && componentNameAndSubtypes[0].equals(componentName));
+        return false;
     }
 
     @VisibleForTesting
