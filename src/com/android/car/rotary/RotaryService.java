@@ -18,8 +18,6 @@ package com.android.car.rotary;
 import static android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS;
 import static android.car.settings.CarSettings.Secure.KEY_ROTARY_KEY_EVENT_FILTER;
 import static android.provider.Settings.Secure.DEFAULT_INPUT_METHOD;
-import static android.provider.Settings.Secure.DISABLED_SYSTEM_INPUT_METHODS;
-import static android.provider.Settings.Secure.ENABLED_INPUT_METHODS;
 import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.KeyEvent.ACTION_DOWN;
 import static android.view.KeyEvent.ACTION_UP;
@@ -102,6 +100,8 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
+import android.view.inputmethod.InputMethodInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
@@ -537,57 +537,6 @@ public class RotaryService extends AccessibilityService implements
         NAVIGATION_KEYCODE_TO_DPAD_KEYCODE_MAP = Collections.unmodifiableMap(map);
     }
 
-    private final BroadcastReceiver mHomeButtonReceiver = new BroadcastReceiver() {
-        // Should match the values in PhoneWindowManager.java
-        private static final String SYSTEM_DIALOG_REASON_KEY = "reason";
-        private static final String SYSTEM_DIALOG_REASON_HOME_KEY = "homekey";
-
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            String reason = intent.getStringExtra(SYSTEM_DIALOG_REASON_KEY);
-            if (!SYSTEM_DIALOG_REASON_HOME_KEY.equals(reason)) {
-                L.d("Skipping the processing of ACTION_CLOSE_SYSTEM_DIALOGS broadcast event due "
-                        + "to reason: " + reason);
-                return;
-            }
-
-            // Trigger a back action in order to exit direct manipulation mode.
-            if (mInDirectManipulationMode) {
-                handleBackButtonEvent(ACTION_DOWN);
-                handleBackButtonEvent(ACTION_UP);
-            }
-
-            List<AccessibilityWindowInfo> windows = getWindows();
-            for (AccessibilityWindowInfo window : windows) {
-                if (window == null) {
-                    continue;
-                }
-
-                if (mInRotaryMode && mNavigator.isMainApplicationWindow(window)) {
-                    // Post this in a handler so that there is no race condition between app
-                    // transitions and restoration of focus.
-                    getMainThreadHandler().post(() -> {
-                        boolean success = restoreDefaultFocusInWindow(window);
-                        if (!success) {
-                            L.e("Failed to focus the default element in the application window");
-                        }
-                        window.recycle();
-                    });
-                } else {
-                    // Post this in a handler so that there is no race condition between app
-                    // transitions and restoration of focus.
-                    getMainThreadHandler().post(() -> {
-                        boolean success = clearFocusInWindow(window);
-                        if (!success) {
-                            L.e("Failed to clear the focus in window: " + window);
-                        }
-                        window.recycle();
-                    });
-                }
-            }
-        }
-    };
-
     private Car mCar;
     private CarInputManager mCarInputManager;
     private InputManager mInputManager;
@@ -613,6 +562,8 @@ public class RotaryService extends AccessibilityService implements
     private long mPendingFocusedExpirationTime;
 
     @Nullable private ContentResolver mContentResolver;
+
+    @Nullable private InputMethodManager mInputMethodManager;
 
     private final BroadcastReceiver mAppInstallUninstallReceiver = new BroadcastReceiver() {
         @Override
@@ -670,7 +621,7 @@ public class RotaryService extends AccessibilityService implements
                 mDefaultTouchInputMethod);
         if (mRotaryInputMethod != null
                 && mRotaryInputMethod.equals(getCurrentIme())
-                && isValidIme(mTouchInputMethod)) {
+                && isInstalledIme(mTouchInputMethod)) {
             // Switch from the rotary IME to the touch IME in case Android defaults to the rotary
             // IME.
             // TODO(b/169423887): Figure out how to configure the default IME through Android
@@ -701,9 +652,6 @@ public class RotaryService extends AccessibilityService implements
         }
 
         mProjectedApps = Arrays.asList(res.getStringArray(R.array.projected_apps));
-
-        getWindowContext().registerReceiver(mHomeButtonReceiver,
-                new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS), Context.RECEIVER_EXPORTED);
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -769,6 +717,10 @@ public class RotaryService extends AccessibilityService implements
         updateServiceInfo();
 
         mInputManager = getSystemService(InputManager.class);
+        mInputMethodManager = getSystemService(InputMethodManager.class);
+        if (mInputMethodManager == null) {
+            L.w("Failed to get InputMethodManager");
+        }
 
         // Add an overlay to capture touch events.
         addTouchOverlay();
@@ -790,7 +742,6 @@ public class RotaryService extends AccessibilityService implements
     public void onDestroy() {
         L.v("onDestroy");
         unregisterReceiver(mAppInstallUninstallReceiver);
-        getWindowContext().unregisterReceiver(mHomeButtonReceiver);
 
         unregisterInputMethodObserver();
         unregisterFilterObserver();
@@ -2749,7 +2700,7 @@ public class RotaryService extends AccessibilityService implements
     /** Switches to the rotary IME or the touch IME if needed. */
     private void updateIme() {
         String newIme = mInRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
-        if (mInRotaryMode && !isValidIme(newIme)) {
+        if (mInRotaryMode && !isInstalledIme(newIme)) {
             L.w("Rotary IME doesn't exist: " + newIme);
             return;
         }
@@ -2928,38 +2879,23 @@ public class RotaryService extends AccessibilityService implements
         mWindowCache.setNodeCopier(nodeCopier);
     }
 
-    /**
-     * Checks if the {@code componentName} is an enabled input method or a disabled system input
-     * method. The string should be in the format {@code "package.name/.ClassName"}, e.g. {@code
-     * "com.android.inputmethod.latin/.CarLatinIME"}. Disabled system input methods are considered
-     * valid because switching back to the touch IME should occur even if it's disabled and because
-     * the rotary IME may be disabled so that it doesn't get used for touch.
-     */
-    private boolean isValidIme(@Nullable String componentName) {
-        if (TextUtils.isEmpty(componentName)) {
+    /** Checks if the {@code componentName} is an installed input method. */
+    private boolean isInstalledIme(@Nullable String componentName) {
+        if (TextUtils.isEmpty(componentName) || mInputMethodManager == null) {
             return false;
         }
-        return imeSettingContains(ENABLED_INPUT_METHODS, componentName)
-                || imeSettingContains(DISABLED_SYSTEM_INPUT_METHODS, componentName);
-    }
-
-    /**
-     * Fetches the secure setting {@code settingName} containing a colon-separated list of IMEs with
-     * their subtypes and returns whether {@code componentName} is one of the IMEs.
-     */
-    private boolean imeSettingContains(@NonNull String settingName, @NonNull String componentName) {
-        if (mContentResolver == null) {
-            return false;
+        // Use getInputMethodList() to get the installed input methods. Don't do that by fetching
+        // ENABLED_INPUT_METHODS and DISABLED_SYSTEM_INPUT_METHODS from the secure setting,
+        // because RotaryIME may not be included in any of them (b/229144904).
+        ComponentName component = ComponentName.unflattenFromString(componentName);
+        List<InputMethodInfo> imeList = mInputMethodManager.getInputMethodList();
+        for (InputMethodInfo ime : imeList) {
+            ComponentName imeComponent = ime.getComponent();
+            if (component.equals(imeComponent)) {
+                return true;
+            }
         }
-        String colonSeparatedComponentNamesWithSubtypes =
-                Settings.Secure.getString(mContentResolver, settingName);
-        if (colonSeparatedComponentNamesWithSubtypes == null) {
-            return false;
-        }
-        return Arrays.stream(colonSeparatedComponentNamesWithSubtypes.split(":"))
-                .map(componentNameWithSubtypes -> componentNameWithSubtypes.split(";"))
-                .anyMatch(componentNameAndSubtypes -> componentNameAndSubtypes.length >= 1
-                        && componentNameAndSubtypes[0].equals(componentName));
+        return false;
     }
 
     @VisibleForTesting
