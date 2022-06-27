@@ -26,9 +26,6 @@ import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 
-import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.BOILERPLATE_CODE;
-import static com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport.DUMP_INFO;
-
 import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.view.Display;
@@ -40,13 +37,11 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
-import com.android.car.internal.ExcludeFromCodeCoverageGeneratedReport;
 import com.android.car.ui.FocusArea;
 import com.android.car.ui.FocusParkingView;
 import com.android.internal.util.dump.DualDumpOutputStream;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.function.Predicate;
 
@@ -424,7 +419,7 @@ class Navigator {
 
         // Build a list of candidate focus areas, starting with all the other focus areas in the
         // same window as the current focus area.
-        List<AccessibilityNodeInfo> candidateFocusAreas = findFocusAreas(currentWindow);
+        List<AccessibilityNodeInfo> candidateFocusAreas = findNonEmptyFocusAreas(currentWindow);
         for (AccessibilityNodeInfo focusArea : candidateFocusAreas) {
             if (focusArea.equals(currentFocusArea)) {
                 candidateFocusAreas.remove(focusArea);
@@ -433,10 +428,20 @@ class Navigator {
             }
         }
 
-        // Exclude focus areas that have no descendants to take focus, because once we found a best
-        // candidate focus area, we don't dig into other ones. If it has no descendants to take
-        // focus, the nudge will fail.
-        removeEmptyFocusAreas(candidateFocusAreas);
+        List<Rect> candidateFocusAreasBounds = new ArrayList<>();
+        for (AccessibilityNodeInfo focusArea : candidateFocusAreas) {
+            Rect bounds = Utils.getBoundsInScreen(focusArea);
+            candidateFocusAreasBounds.add(bounds);
+        }
+
+        maybeAddImplicitFocusArea(currentWindow, candidateFocusAreas, candidateFocusAreasBounds);
+
+        // If the current focus area is an explicit focus area, use its focus area bounds to find
+        // nudge target as usual. Otherwise, use the tailored bounds, which was added as the last
+        // element of the list in maybeAddImplicitFocusArea().
+        Rect currentFocusAreaBounds = Utils.isFocusArea(currentFocusArea)
+                ? Utils.getBoundsInScreen(currentFocusArea)
+                : candidateFocusAreasBounds.get(candidateFocusAreasBounds.size() - 1);
 
         if (currentWindow.getType() != TYPE_INPUT_METHOD
                 || shouldNudgeOutOfIme(sourceNode, currentFocusArea, candidateFocusAreas,
@@ -448,21 +453,79 @@ class Navigator {
                     isSourceNodeEditable);
             currentWindow.recycle();
             for (AccessibilityWindowInfo window : candidateWindows) {
-                List<AccessibilityNodeInfo> focusAreasInAnotherWindow = findFocusAreas(window);
+                List<AccessibilityNodeInfo> focusAreasInAnotherWindow =
+                        findNonEmptyFocusAreas(window);
                 candidateFocusAreas.addAll(focusAreasInAnotherWindow);
-            }
 
-            // Exclude focus areas that have no descendants to take focus, because once we found a
-            // best candidate focus area, we don't dig into other ones. If it has no descendants to
-            // take focus, the nudge will fail.
-            removeEmptyFocusAreas(candidateFocusAreas);
+                for (AccessibilityNodeInfo focusArea : focusAreasInAnotherWindow) {
+                    Rect bounds = Utils.getBoundsInScreen(focusArea);
+                    candidateFocusAreasBounds.add(bounds);
+                }
+
+                maybeAddImplicitFocusArea(window, candidateFocusAreas, candidateFocusAreasBounds);
+            }
         }
 
+        Rect sourceBounds = Utils.getBoundsInScreen(sourceNode);
         // Choose the best candidate as our target focus area.
-        AccessibilityNodeInfo targetFocusArea =
-                chooseBestNudgeCandidate(sourceNode, candidateFocusAreas, direction);
+        AccessibilityNodeInfo targetFocusArea = chooseBestNudgeCandidate(sourceBounds,
+                currentFocusAreaBounds, candidateFocusAreas, candidateFocusAreasBounds, direction);
         Utils.recycleNodes(candidateFocusAreas);
         return targetFocusArea;
+    }
+
+    /**
+     * If there are orphan nodes in {@code window}, treats the root node of the window as an
+     * implicit focus area, and add it to {@code candidateFocusAreas}. Besides, tailors its bounds
+     * so that it just wraps its orphan descendants, and adds the tailored bounds to
+     * {@code candidateFocusAreasBounds}.
+     * Orphan nodes are focusable nodes not wrapped inside any explicitly declared focus areas.
+     * It happens in two scenarios:
+     * <ul>
+     *     <li>The app developer wants to treat the entire window as a focus area but doesn't bother
+     *         declaring a focus area to wrap around them. This is allowed.
+     *     <li>The app developer intends to declare focus areas to wrap around focusable views, but
+     *         misses some focusable views, causing them to be unreachable via rotary controller.
+     *         This is not allowed, but RotaryService will try its best to make them reachable.
+     * </ul>
+     */
+    @VisibleForTesting
+    void maybeAddImplicitFocusArea(@NonNull AccessibilityWindowInfo window,
+            @NonNull List<AccessibilityNodeInfo> candidateFocusAreas,
+            @NonNull List<Rect> candidateFocusAreasBounds) {
+        AccessibilityNodeInfo root = window.getRoot();
+        if (root == null) {
+            L.e("No root node for " + window);
+            return;
+        }
+        // If the root node is in the client app and therefore contains a SurfaceView, skip the view
+        // hierarchy of the client app, and scan the view hierarchy of the host app, which is
+        // embedded in the SurfaceView.
+        if (isClientNode(root)) {
+            L.v("Root node is client node " + root);
+            AccessibilityNodeInfo hostRoot = getDescendantHostRoot(root);
+            root.recycle();
+            if (hostRoot == null || !hasFocusableDescendants(hostRoot)) {
+                L.w("No host node or host node has no focusable descendants " + hostRoot);
+                Utils.recycleNode(hostRoot);
+                return;
+            }
+            candidateFocusAreas.add(hostRoot);
+            Rect bounds = new Rect();
+            // To make things simple, just use the node's bounds. Don't tailor the bounds.
+            hostRoot.getBoundsInScreen(bounds);
+            candidateFocusAreasBounds.add(bounds);
+            return;
+        }
+
+        Rect bounds = computeMinimumBoundsForOrphanDescendants(root);
+        if (bounds.isEmpty()) {
+            return;
+        }
+        L.w("The root node contains focusable nodes that are not inside any focus "
+                + "areas: " + root);
+        candidateFocusAreas.add(root);
+        candidateFocusAreasBounds.add(bounds);
     }
 
     /**
@@ -477,25 +540,15 @@ class Navigator {
         if (!focusAreasInCurrentWindow.isEmpty()) {
             Rect sourceBounds = Utils.getBoundsInScreen(sourceNode);
             Rect sourceFocusAreaBounds = Utils.getBoundsInScreen(currentFocusArea);
+            Rect candidateBounds = Utils.getBoundsInScreen(currentFocusArea);
             for (AccessibilityNodeInfo candidate : focusAreasInCurrentWindow) {
-                if (isCandidate(sourceBounds, sourceFocusAreaBounds, candidate, direction)) {
+                if (isCandidate(sourceBounds, sourceFocusAreaBounds, candidate, candidateBounds,
+                        direction)) {
                     return false;
                 }
             }
         }
         return true;
-    }
-
-    private void removeEmptyFocusAreas(@NonNull List<AccessibilityNodeInfo> focusAreas) {
-        for (Iterator<AccessibilityNodeInfo> iterator = focusAreas.iterator();
-                iterator.hasNext(); ) {
-            AccessibilityNodeInfo focusArea = iterator.next();
-            if (!Utils.canHaveFocus(focusArea)
-                    && !containsWebViewWithFocusableDescendants(focusArea)) {
-                iterator.remove();
-                focusArea.recycle();
-            }
-        }
     }
 
     private boolean containsWebViewWithFocusableDescendants(@NonNull AccessibilityNodeInfo node) {
@@ -597,31 +650,24 @@ class Navigator {
     }
 
     /**
-     * Scans the view hierarchy of the given {@code window} looking for focus areas and returns
-     * them. If there are no explicitly declared {@link FocusArea}s, returns the root view. The
-     * caller is responsible for recycling the result.
+     * Scans the view hierarchy of the given {@code window} looking for explicit focus areas with
+     * focusable descendants and returns the focus areas. The caller is responsible for recycling
+     * the result.
      */
     @NonNull
     @VisibleForTesting
-    List<AccessibilityNodeInfo> findFocusAreas(@NonNull AccessibilityWindowInfo window) {
+    List<AccessibilityNodeInfo> findNonEmptyFocusAreas(@NonNull AccessibilityWindowInfo window) {
         List<AccessibilityNodeInfo> results = new ArrayList<>();
         AccessibilityNodeInfo rootNode = window.getRoot();
-        if (rootNode != null) {
-            // If the root node is in the client app therefore contains a SurfaceView, skip the view
-            // hierarchy of the client app, and scan the view hierarchy of the host app, which is
-            // embedded in the SurfaceView.
-            if (isClientNode(rootNode)) {
-                AccessibilityNodeInfo hostRoot = getDescendantHostRoot(rootNode);
-                rootNode.recycle();
-                rootNode = hostRoot;
-            }
-
-            addFocusAreas(rootNode, results);
-            if (results.isEmpty()) {
-                results.add(copyNode(rootNode));
-            }
-            rootNode.recycle();
+        if (rootNode == null) {
+            L.e("No root node for " + window);
+        } else if (!isClientNode(rootNode)) {
+            addNonEmptyFocusAreas(rootNode, results);
         }
+        // If the root node is in the client app, it won't contain any explicit focus areas, so
+        // skip it.
+
+        Utils.recycleNode(rootNode);
         return results;
     }
 
@@ -712,6 +758,19 @@ class Navigator {
     }
 
     /**
+     * Returns the first orphan descendant (focusable descendant not inside any focus areas) of
+     * {@code node}. The nodes are searched in depth-first order, not including {@code node} itself.
+     * If not found, null is returned. The caller is responsible for recycling the result.
+     */
+    @Nullable
+    AccessibilityNodeInfo findFirstOrphan(@NonNull AccessibilityNodeInfo node) {
+        return mTreeTraverser.depthFirstSearch(node,
+                /* skipPredicate= */ Utils::isFocusArea,
+                /* targetPredicate= */ candidateNode -> candidateNode != node
+                        && Utils.canTakeFocus(candidateNode));
+    }
+
+    /**
      * Returns the last descendant of {@code node} which can take focus. The nodes are searched in
      * reverse depth-first order, not including {@code node} itself. If no descendant can take
      * focus, null is returned. The caller is responsible for recycling the result.
@@ -723,16 +782,54 @@ class Navigator {
     }
 
     /**
-     * Scans descendants of the given {@code rootNode} looking for focus areas and adds them to the
-     * given list. It doesn't scan inside focus areas since nested focus areas aren't allowed. The
-     * caller is responsible for recycling added nodes.
+     * Scans descendants of the given {@code rootNode} looking for explicit focus areas with
+     * focusable descendants and adds the focus areas to the given list. It doesn't scan inside
+     * focus areas since nested focus areas aren't allowed. It ignores focus areas without
+     * focusable descendants, because once we found the best candidate focus area, we don't dig
+     * into other ones. If it has no descendants to take focus, the nudge will fail. The caller is
+     * responsible for recycling added nodes.
      *
      * @param rootNode the root to start scanning from
      * @param results  a list of focus areas to add to
      */
-    private void addFocusAreas(@NonNull AccessibilityNodeInfo rootNode,
+    private void addNonEmptyFocusAreas(@NonNull AccessibilityNodeInfo rootNode,
             @NonNull List<AccessibilityNodeInfo> results) {
-        mTreeTraverser.depthFirstSelect(rootNode, Utils::isFocusArea, results);
+        mTreeTraverser.depthFirstSelect(rootNode,
+                (focusArea) -> Utils.isFocusArea(focusArea) && hasFocusableDescendants(focusArea),
+                results);
+    }
+
+    private boolean hasFocusableDescendants(@NonNull AccessibilityNodeInfo focusArea) {
+        return Utils.canHaveFocus(focusArea) || containsWebViewWithFocusableDescendants(focusArea);
+    }
+
+    /**
+     * Returns the minimum rectangle wrapping the given {@code node}'s orphan descendants. If
+     * {@code node} has no orphan descendants, returns an empty {@link Rect}.
+     */
+    @NonNull
+    @VisibleForTesting
+    Rect computeMinimumBoundsForOrphanDescendants(
+            @NonNull AccessibilityNodeInfo node) {
+        Rect bounds = new Rect();
+        if (Utils.isFocusArea(node) || Utils.isFocusParkingView(node)) {
+            return bounds;
+        }
+        if (Utils.canTakeFocus(node) || containsWebViewWithFocusableDescendants(node)) {
+            return Utils.getBoundsInScreen(node);
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) {
+                continue;
+            }
+            Rect childBounds = computeMinimumBoundsForOrphanDescendants(child);
+            child.recycle();
+            if (childBounds != null) {
+                bounds.union(childBounds);
+            }
+        }
+        return bounds;
     }
 
     /**
@@ -744,23 +841,21 @@ class Navigator {
      * @param candidates could be a list of {@link FocusArea}s, or a list of focusable views
      */
     @Nullable
-    private AccessibilityNodeInfo chooseBestNudgeCandidate(
-            @NonNull AccessibilityNodeInfo sourceNode,
+    private AccessibilityNodeInfo chooseBestNudgeCandidate(@NonNull Rect sourceBounds,
+            @NonNull Rect sourceFocusAreaBounds,
             @NonNull List<AccessibilityNodeInfo> candidates,
+            @NonNull List<Rect> candidatesBounds,
             int direction) {
         if (candidates.isEmpty()) {
             return null;
         }
-        Rect sourceBounds = Utils.getBoundsInScreen(sourceNode);
-        AccessibilityNodeInfo sourceFocusArea = getAncestorFocusArea(sourceNode);
-        Rect sourceFocusAreaBounds = Utils.getBoundsInScreen(sourceFocusArea);
-        sourceFocusArea.recycle();
         AccessibilityNodeInfo bestNode = null;
         Rect bestBounds = new Rect();
-
-        for (AccessibilityNodeInfo candidate : candidates) {
-            if (isCandidate(sourceBounds, sourceFocusAreaBounds, candidate, direction)) {
-                Rect candidateBounds = Utils.getBoundsInScreen(candidate);
+        for (int i = 0; i < candidates.size(); i++) {
+            AccessibilityNodeInfo candidate = candidates.get(i);
+            Rect candidateBounds = candidatesBounds.get(i);
+            if (isCandidate(sourceBounds, sourceFocusAreaBounds, candidate, candidateBounds,
+                    direction)) {
                 if (bestNode == null || FocusFinder.isBetterCandidate(
                         direction, sourceBounds, candidateBounds, bestBounds)) {
                     bestNode = candidate;
@@ -786,6 +881,7 @@ class Navigator {
     private boolean isCandidate(@NonNull Rect sourceBounds,
             @NonNull Rect sourceFocusAreaBounds,
             @NonNull AccessibilityNodeInfo node,
+            @NonNull Rect nodeBounds,
             int direction) {
         AccessibilityNodeInfo candidate = mTreeTraverser.depthFirstSearch(node,
                 /* skipPredicate= */ candidateNode -> {
@@ -796,14 +892,13 @@ class Navigator {
                     // doesn't intersect with sourceFocusAreaBounds, and it's not in the given
                     // direction of sourceFocusAreaBounds, it's not a candidate, so we should return
                     // true to stop searching.
-                    Rect candidateBounds = Utils.getBoundsInScreen(candidateNode);
-                    return !Rect.intersects(candidateBounds,sourceFocusAreaBounds)
+                    return !Rect.intersects(nodeBounds, sourceFocusAreaBounds)
                             && !FocusFinder.isInDirection(
-                                sourceFocusAreaBounds, candidateBounds, direction);
+                                sourceFocusAreaBounds, nodeBounds, direction);
                 },
                 /* targetPredicate= */ candidateNode -> {
                     // RotaryService can navigate to nodes in a WebView or a ComposeView even when
-                    // off-screen so we use canPerformFocus() to skip the bounds check.
+                    // off-screen, so we use canPerformFocus() to skip the bounds check.
                     if (isInVirtualNodeHierarchy(candidateNode)) {
                         return Utils.canPerformFocus(candidateNode);
                     }
@@ -818,8 +913,7 @@ class Navigator {
                         return false;
                     }
                     // The node represents a focusable view in a focus area, so check the geometry.
-                    Rect candidateBounds = Utils.getBoundsInScreen(candidateNode);
-                    return FocusFinder.isCandidate(sourceBounds, candidateBounds, direction);
+                    return FocusFinder.isCandidate(sourceBounds, nodeBounds, direction);
                 });
         if (candidate == null) {
             return false;
@@ -1007,7 +1101,6 @@ class Navigator {
                 });
     }
 
-    @ExcludeFromCodeCoverageGeneratedReport(reason = DUMP_INFO)
     void dump(@NonNull DualDumpOutputStream dumpOutputStream, boolean dumpAsProto,
             @NonNull String fieldName, long fieldId) {
         long fieldToken = dumpOutputStream.start(fieldName, fieldId);
@@ -1022,7 +1115,6 @@ class Navigator {
         dumpOutputStream.end(fieldToken);
     }
 
-    @ExcludeFromCodeCoverageGeneratedReport(reason = BOILERPLATE_CODE)
     static String directionToString(@View.FocusRealDirection int direction) {
         switch (direction) {
             case FOCUS_UP:
