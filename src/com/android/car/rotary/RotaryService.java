@@ -2672,7 +2672,8 @@ public class RotaryService extends AccessibilityService implements
         }
     }
 
-    private void setInRotaryMode(boolean inRotaryMode) {
+    @VisibleForTesting
+    void setInRotaryMode(boolean inRotaryMode) {
         mInRotaryMode = inRotaryMode;
         if (!mInRotaryMode) {
             setEditNode(null);
