@@ -186,7 +186,8 @@ public class RotaryServiceTest {
      *               button1  defaultFocus  button3
      *                                      (focused)
      * </pre>
-     * and {@link RotaryService#mFocusedNode} is not initialized.
+     * {@link RotaryService#mFocusedNode} is not initialized.
+     * and {@link RotaryService.mInRotaryMode} is set to true.
      */
     @Test
     public void testInitFocus_focusOnAlreadyFocusedView() {
@@ -202,6 +203,7 @@ public class RotaryServiceTest {
         Activity activity = mActivityRule.getActivity();
         Button button3 = activity.findViewById(R.id.button3);
         button3.post(() -> button3.requestFocus());
+        mRotaryService.setInRotaryMode(true);
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         assertThat(button3.isFocused()).isTrue();
         assertNull(mRotaryService.getFocusedNode());
