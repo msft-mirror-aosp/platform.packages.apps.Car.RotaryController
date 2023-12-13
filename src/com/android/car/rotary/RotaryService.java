@@ -2716,14 +2716,26 @@ public class RotaryService extends AccessibilityService implements
 
     /** Switches to the rotary IME or the touch IME if needed. */
     private void updateIme() {
-        String newIme = mInRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
-        if (mInRotaryMode && !Utils.isInstalledIme(newIme, mInputMethodManager)) {
-            L.w("Rotary IME doesn't exist: " + newIme);
-            return;
+        String newIme;
+        if (mInRotaryMode) {
+            // We're entering Rotary mode, therefore we're setting the rotary IME as the
+            // default IME.
+            newIme = mRotaryInputMethod;
+        } else {
+            String oldIme = getCurrentIme();
+            if (Objects.equals(oldIme, mRotaryInputMethod)) {
+                // Since the previous IME was rotary IME and we're leaving rotary mode, then we
+                // switch back to the Android Auto default IME.
+                newIme = mTouchInputMethod;
+            } else {
+                // Since we're not entering rotary mode and the current keyboard is not the rotary
+                // IME, then there is no need to switch IMEs.
+                return;
+            }
         }
-        String oldIme = getCurrentIme();
-        if (Objects.equals(oldIme, newIme)) {
-            L.v("No need to switch IME: " + newIme);
+
+        if (!Utils.isInstalledIme(newIme, mInputMethodManager)) {
+            L.w("Rotary IME doesn't exist: " + newIme);
             return;
         }
         setCurrentIme(newIme);
