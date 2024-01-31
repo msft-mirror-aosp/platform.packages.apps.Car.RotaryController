@@ -76,6 +76,7 @@ final class Utils {
     static final String COMPOSE_VIEW_CLASS_NAME = "androidx.compose.ui.platform.ComposeView";
     @VisibleForTesting
     static final String SURFACE_VIEW_CLASS_NAME = SurfaceView.class.getName();
+    static final String LOG_INDENT = "    ";
 
     private Utils() {
     }
@@ -450,5 +451,18 @@ final class Utils {
             }
         }
         return false;
+    }
+
+    /** Prints the node and its descendants. */
+    static void printDescendants(@Nullable AccessibilityNodeInfo root, String indent) {
+        if (root == null) {
+            return;
+        }
+        L.d(indent + root);
+        for (int i = 0; i < root.getChildCount(); i++) {
+            AccessibilityNodeInfo child = root.getChild(i);
+            printDescendants(child, indent + LOG_INDENT);
+            Utils.recycleNode(child);
+        }
     }
 }

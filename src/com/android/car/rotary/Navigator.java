@@ -439,9 +439,27 @@ class Navigator {
         // If the current focus area is an explicit focus area, use its focus area bounds to find
         // nudge target as usual. Otherwise, use the tailored bounds, which was added as the last
         // element of the list in maybeAddImplicitFocusArea().
-        Rect currentFocusAreaBounds = Utils.isFocusArea(currentFocusArea)
-                ? Utils.getBoundsInScreen(currentFocusArea)
-                : candidateFocusAreasBounds.get(candidateFocusAreasBounds.size() - 1);
+        Rect currentFocusAreaBounds;
+        if (Utils.isFocusArea(currentFocusArea)) {
+            currentFocusAreaBounds = Utils.getBoundsInScreen(currentFocusArea);
+        } else if (candidateFocusAreasBounds.size() > 0) {
+            currentFocusAreaBounds =
+                    candidateFocusAreasBounds.get(candidateFocusAreasBounds.size() - 1);
+        } else {
+            // TODO(b/323112198): this should never happen, but let's try to recover from this.
+            L.e("currentFocusArea is an implicit focus area but not added to"
+                    + " currentFocusAreaBounds");
+            L.d("sourceNode:" + sourceNode);
+            L.d("currentFocusArea:" + currentFocusArea);
+            AccessibilityNodeInfo root = getRoot(sourceNode);
+            Utils.printDescendants(root, Utils.LOG_INDENT);
+            Utils.recycleNode(root);
+
+            currentFocusArea.recycle();
+            currentFocusArea = getAncestorFocusArea(sourceNode);
+            currentFocusAreaBounds = Utils.getBoundsInScreen(currentFocusArea);
+            L.d("updated currentFocusArea:" + currentFocusArea);
+        }
 
         if (currentWindow.getType() != TYPE_INPUT_METHOD
                 || shouldNudgeOutOfIme(sourceNode, currentFocusArea, candidateFocusAreas,
