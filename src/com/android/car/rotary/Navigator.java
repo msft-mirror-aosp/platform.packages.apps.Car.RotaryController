@@ -111,6 +111,11 @@ class Navigator {
         mSurfaceViewHelper.clearHostApp(packageName);
     }
 
+    /** Returns whether it supports AAOS template apps. */
+    boolean supportTemplateApp() {
+        return mSurfaceViewHelper.supportTemplateApp();
+    }
+
     /** Adds the package name of the client app. */
     void addClientApp(@NonNull CharSequence clientAppPackageName) {
         mSurfaceViewHelper.addClientApp(clientAppPackageName);
