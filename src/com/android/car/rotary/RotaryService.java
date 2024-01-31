@@ -622,9 +622,16 @@ public class RotaryService extends AccessibilityService implements
 
         mRotaryInputMethod = res.getString(R.string.rotary_input_method);
         mDefaultTouchInputMethod = res.getString(R.string.default_touch_input_method);
+        L.d("mRotaryInputMethod:" + mRotaryInputMethod + ", mDefaultTouchInputMethod:"
+                + mDefaultTouchInputMethod);
         validateImeConfiguration(mDefaultTouchInputMethod);
         mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX
                 + mUserManager.getUserName(), mDefaultTouchInputMethod);
+        if (mTouchInputMethod.isEmpty()) {
+            // Workaround for b/323013736.
+            L.e("mTouchInputMethod shouldn't be empty!");
+            mTouchInputMethod = mDefaultTouchInputMethod;
+        }
         validateImeConfiguration(mTouchInputMethod);
 
         if (mRotaryInputMethod != null && mRotaryInputMethod.equals(getCurrentIme())) {
@@ -1003,9 +1010,12 @@ public class RotaryService extends AccessibilityService implements
                 // mTouchInputMethod and save it so we can switch back after switching to the rotary
                 // input method.
                 String inputMethod = getCurrentIme();
-                if (inputMethod != null && !inputMethod.equals(mRotaryInputMethod)) {
+                L.d("Current IME changed to " + inputMethod);
+                if (!TextUtils.isEmpty(inputMethod) && !inputMethod.equals(mRotaryInputMethod)) {
                     mTouchInputMethod = inputMethod;
                     String userName = mUserManager.getUserName();
+                    L.d("Save mTouchInputMethod(" + mTouchInputMethod + ") for user "
+                            + userName);
                     mPrefs.edit()
                             .putString(TOUCH_INPUT_METHOD_PREFIX + userName, mTouchInputMethod)
                             .apply();
