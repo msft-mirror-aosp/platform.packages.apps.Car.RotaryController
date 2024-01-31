@@ -125,6 +125,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
@@ -563,6 +565,8 @@ public class RotaryService extends AccessibilityService implements
     @Nullable private ContentResolver mContentResolver;
 
     @Nullable private InputMethodManager mInputMethodManager;
+
+    private final ExecutorService mExecutor = Executors.newSingleThreadExecutor();
 
     private final BroadcastReceiver mAppInstallUninstallReceiver = new BroadcastReceiver() {
         @Override
@@ -2033,11 +2037,19 @@ public class RotaryService extends AccessibilityService implements
     private void onForegroundActivityChanged(@NonNull AccessibilityNodeInfo root,
             @NonNull AccessibilityWindowInfo window,
             @Nullable CharSequence packageName, @Nullable CharSequence className) {
-        // If the foreground app is a client app, store its package name.
-        AccessibilityNodeInfo surfaceView = mNavigator.findSurfaceViewInRoot(root);
-        if (surfaceView != null) {
-            mNavigator.addClientApp(surfaceView.getPackageName());
-            surfaceView.recycle();
+        if (mNavigator.supportTemplateApp()) {
+            // Check if there is a SurfaceView node to decide whether the foreground app is an
+            // AAOS template app. This is done on background thread to avoid ANR (b/322324727).
+            // TODO: find a better way to solve this to avoid potential race condition.
+            mExecutor.execute(() -> {
+                // If the foreground app is a client app, store its package name.
+                AccessibilityNodeInfo surfaceView =
+                        mNavigator.findSurfaceViewInRoot(root);
+                if (surfaceView != null) {
+                    mNavigator.addClientApp(surfaceView.getPackageName());
+                    surfaceView.recycle();
+                }
+            });
         }
 
         ComponentName newActivity = packageName != null && className != null
