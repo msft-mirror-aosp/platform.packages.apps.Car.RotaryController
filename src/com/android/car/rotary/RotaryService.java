@@ -2529,7 +2529,8 @@ public class RotaryService extends AccessibilityService implements
             fpv.recycle();
             return true;
         }
-        boolean result = performFocusAction(fpv);
+        // Don't call performFocusAction(fpv) because it might cause infinite loop (b/322137915).
+        boolean result = fpv.performAction(ACTION_FOCUS);
         if (!result) {
             L.w("Failed to perform ACTION_FOCUS on " + fpv);
         }
