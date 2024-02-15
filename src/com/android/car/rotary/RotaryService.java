@@ -622,9 +622,16 @@ public class RotaryService extends AccessibilityService implements
 
         mRotaryInputMethod = res.getString(R.string.rotary_input_method);
         mDefaultTouchInputMethod = res.getString(R.string.default_touch_input_method);
+        L.d("mRotaryInputMethod:" + mRotaryInputMethod + ", mDefaultTouchInputMethod:"
+                + mDefaultTouchInputMethod);
         validateImeConfiguration(mDefaultTouchInputMethod);
         mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX
                 + mUserManager.getUserName(), mDefaultTouchInputMethod);
+        if (mTouchInputMethod.isEmpty()) {
+            // Workaround for b/323013736.
+            L.e("mTouchInputMethod shouldn't be empty!");
+            mTouchInputMethod = mDefaultTouchInputMethod;
+        }
         validateImeConfiguration(mTouchInputMethod);
 
         if (mRotaryInputMethod != null && mRotaryInputMethod.equals(getCurrentIme())) {
@@ -1003,9 +1010,12 @@ public class RotaryService extends AccessibilityService implements
                 // mTouchInputMethod and save it so we can switch back after switching to the rotary
                 // input method.
                 String inputMethod = getCurrentIme();
-                if (inputMethod != null && !inputMethod.equals(mRotaryInputMethod)) {
+                L.d("Current IME changed to " + inputMethod);
+                if (!TextUtils.isEmpty(inputMethod) && !inputMethod.equals(mRotaryInputMethod)) {
                     mTouchInputMethod = inputMethod;
                     String userName = mUserManager.getUserName();
+                    L.d("Save mTouchInputMethod(" + mTouchInputMethod + ") for user "
+                            + userName);
                     mPrefs.edit()
                             .putString(TOUCH_INPUT_METHOD_PREFIX + userName, mTouchInputMethod)
                             .apply();
@@ -1645,6 +1655,7 @@ public class RotaryService extends AccessibilityService implements
         // what FocusArea to nudge to. In this case, we'll find a target FocusArea using geometry.
         AccessibilityNodeInfo targetFocusArea =
                 mNavigator.findNudgeTargetFocusArea(windows, mFocusedNode, mFocusArea, direction);
+        L.d("Found targetFocusArea: " + targetFocusArea);
 
         if (targetFocusArea == null) {
             L.d("Failed to find nearest FocusArea for nudge");
@@ -1975,6 +1986,7 @@ public class RotaryService extends AccessibilityService implements
         int direction = clockwise ? View.FOCUS_FORWARD : View.FOCUS_BACKWARD;
         Navigator.FindRotateTargetResult result =
                 mNavigator.findRotateTarget(mFocusedNode, direction, rotationCount);
+        L.d("Found rotation result: " + result);
         if (result != null) {
             if (performFocusAction(result.node)) {
                 remainingRotationCount -= result.advancedCount;
@@ -1983,6 +1995,7 @@ public class RotaryService extends AccessibilityService implements
         } else {
             L.w("Failed to find rotate target from " + mFocusedNode);
         }
+        L.d("mFocusedNode: " + mFocusedNode);
 
         // If navigation didn't consume all of rotationCount and the focused node either is a
         // scrollable container or is a descendant of one, scroll it. The former happens when no
@@ -1992,7 +2005,7 @@ public class RotaryService extends AccessibilityService implements
         // is only supported in the focused window because injected events always go to the focused
         // window. We don't bother checking whether the scrollable container can currently scroll
         // because there's nothing else to do if it can't.
-        if (remainingRotationCount > 0 && isInFocusedWindow(mFocusedNode)) {
+        if (mFocusedNode != null && remainingRotationCount > 0 && isInFocusedWindow(mFocusedNode)) {
             AccessibilityNodeInfo scrollableContainer =
                     mNavigator.findScrollableContainer(mFocusedNode);
             if (scrollableContainer != null) {
@@ -2516,7 +2529,8 @@ public class RotaryService extends AccessibilityService implements
             fpv.recycle();
             return true;
         }
-        boolean result = performFocusAction(fpv);
+        // Don't call performFocusAction(fpv) because it might cause infinite loop (b/322137915).
+        boolean result = fpv.performAction(ACTION_FOCUS);
         if (!result) {
             L.w("Failed to perform ACTION_FOCUS on " + fpv);
         }
@@ -2716,14 +2730,26 @@ public class RotaryService extends AccessibilityService implements
 
     /** Switches to the rotary IME or the touch IME if needed. */
     private void updateIme() {
-        String newIme = mInRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
-        if (mInRotaryMode && !Utils.isInstalledIme(newIme, mInputMethodManager)) {
-            L.w("Rotary IME doesn't exist: " + newIme);
-            return;
+        String newIme;
+        if (mInRotaryMode) {
+            // We're entering Rotary mode, therefore we're setting the rotary IME as the
+            // default IME.
+            newIme = mRotaryInputMethod;
+        } else {
+            String oldIme = getCurrentIme();
+            if (Objects.equals(oldIme, mRotaryInputMethod)) {
+                // Since the previous IME was rotary IME and we're leaving rotary mode, then we
+                // switch back to the Android Auto default IME.
+                newIme = mTouchInputMethod;
+            } else {
+                // Since we're not entering rotary mode and the current keyboard is not the rotary
+                // IME, then there is no need to switch IMEs.
+                return;
+            }
         }
-        String oldIme = getCurrentIme();
-        if (Objects.equals(oldIme, newIme)) {
-            L.v("No need to switch IME: " + newIme);
+
+        if (!Utils.isInstalledIme(newIme, mInputMethodManager)) {
+            L.w("Rotary IME doesn't exist: " + newIme);
             return;
         }
         setCurrentIme(newIme);

@@ -1,7 +1,6 @@
-# Default code reviewers picked from top 3 or more developers.
-# Please update this list if you find better candidates.
-
-depstein@google.com
+# Primary
 yabinh@google.com
-agathaman@google.com
-hseog@google.com
+
+# Secondary
+nehah@google.com
+igorr@google.com
