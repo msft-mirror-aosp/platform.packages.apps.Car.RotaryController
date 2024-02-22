@@ -185,7 +185,8 @@ class Navigator {
             //    area),
             // 3. and nextCandidate is different from candidate (if sourceNode is the first
             //    focusable node in the window, searching backward will return sourceNode itself).
-            if (nextCandidate != null && currentFocusArea.equals(candidateFocusArea)
+            if (nextCandidate != null && currentFocusArea != null
+                    && currentFocusArea.equals(candidateFocusArea)
                     && !Utils.isFocusParkingView(nextCandidate)
                     && !nextCandidate.equals(candidate)) {
                 // We need to skip nextTargetNode if:
@@ -235,7 +236,6 @@ class Navigator {
                 break;
             }
         }
-        currentFocusArea.recycle();
         candidate.recycle();
         if (sourceNode.equals(target)) {
             L.e("Wrap-around on the same node");
@@ -972,7 +972,8 @@ class Navigator {
         };
         AccessibilityNodeInfo result = mTreeTraverser.findNodeOrAncestor(node, isFocusAreaOrRoot);
         if (result == null || !Utils.isFocusArea(result)) {
-            L.w("Couldn't find ancestor focus area for given node: " + node);
+            L.w("Ancestor focus area for node " + node + " is not an explicit FocusArea: "
+                    + result);
         }
         return result;
     }
