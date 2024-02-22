@@ -1259,6 +1259,11 @@ public class RotaryService extends AccessibilityService implements
         switch (mAfterScrollAction) {
             case FOCUS_PREVIOUS:
             case FOCUS_NEXT: {
+                if (mFocusedNode == null) {
+                    // TODO(326013682): find out why mFocusedNode is null.
+                    L.w("mFocusedNode is null after injecting scroll event");
+                    break;
+                }
                 if (mFocusedNode.equals(sourceNode)) {
                     break;
                 }
@@ -2119,6 +2124,7 @@ public class RotaryService extends AccessibilityService implements
         }
         if (enable) {
             mFocusedNode = Utils.refreshNode(mFocusedNode);
+            L.v("After refresh, mFocusedNode is " + mFocusedNode);
             if (mFocusedNode == null) {
                 L.w("Failed to enter direct manipulation mode because mFocusedNode is no longer "
                         + "in view tree.");
@@ -2268,6 +2274,7 @@ public class RotaryService extends AccessibilityService implements
      */
     private void refreshSavedNodes() {
         mFocusedNode = Utils.refreshNode(mFocusedNode);
+        L.v("After refresh, mFocusedNode is " + mFocusedNode);
         mEditNode = Utils.refreshNode(mEditNode);
         mLastTouchedNode = Utils.refreshNode(mLastTouchedNode);
         mFocusArea = Utils.refreshNode(mFocusArea);
@@ -2438,6 +2445,7 @@ public class RotaryService extends AccessibilityService implements
      */
     private void maybeClearFocusInCurrentWindow(@Nullable AccessibilityNodeInfo targetFocus) {
         mFocusedNode = Utils.refreshNode(mFocusedNode);
+        L.v("After refresh, mFocusedNode is " + mFocusedNode);
         if (mFocusedNode == null
                 // No need to clear focus if mFocusedNode is not focused. However, when it's a node
                 // in a WebView or ComposeView, its state might not be up to date,
