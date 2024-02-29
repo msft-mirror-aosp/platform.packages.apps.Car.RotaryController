@@ -125,6 +125,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
@@ -563,6 +565,8 @@ public class RotaryService extends AccessibilityService implements
     @Nullable private ContentResolver mContentResolver;
 
     @Nullable private InputMethodManager mInputMethodManager;
+
+    private final ExecutorService mExecutor = Executors.newSingleThreadExecutor();
 
     private final BroadcastReceiver mAppInstallUninstallReceiver = new BroadcastReceiver() {
         @Override
@@ -1259,6 +1263,11 @@ public class RotaryService extends AccessibilityService implements
         switch (mAfterScrollAction) {
             case FOCUS_PREVIOUS:
             case FOCUS_NEXT: {
+                if (mFocusedNode == null) {
+                    // TODO(326013682): find out why mFocusedNode is null.
+                    L.w("mFocusedNode is null after injecting scroll event");
+                    break;
+                }
                 if (mFocusedNode.equals(sourceNode)) {
                     break;
                 }
@@ -2043,11 +2052,19 @@ public class RotaryService extends AccessibilityService implements
     private void onForegroundActivityChanged(@NonNull AccessibilityNodeInfo root,
             @NonNull AccessibilityWindowInfo window,
             @Nullable CharSequence packageName, @Nullable CharSequence className) {
-        // If the foreground app is a client app, store its package name.
-        AccessibilityNodeInfo surfaceView = mNavigator.findSurfaceViewInRoot(root);
-        if (surfaceView != null) {
-            mNavigator.addClientApp(surfaceView.getPackageName());
-            surfaceView.recycle();
+        if (mNavigator.supportTemplateApp()) {
+            // Check if there is a SurfaceView node to decide whether the foreground app is an
+            // AAOS template app. This is done on background thread to avoid ANR (b/322324727).
+            // TODO: find a better way to solve this to avoid potential race condition.
+            mExecutor.execute(() -> {
+                // If the foreground app is a client app, store its package name.
+                AccessibilityNodeInfo surfaceView =
+                        mNavigator.findSurfaceViewInRoot(root);
+                if (surfaceView != null) {
+                    mNavigator.addClientApp(surfaceView.getPackageName());
+                    surfaceView.recycle();
+                }
+            });
         }
 
         ComponentName newActivity = packageName != null && className != null
@@ -2119,6 +2136,7 @@ public class RotaryService extends AccessibilityService implements
         }
         if (enable) {
             mFocusedNode = Utils.refreshNode(mFocusedNode);
+            L.v("After refresh, mFocusedNode is " + mFocusedNode);
             if (mFocusedNode == null) {
                 L.w("Failed to enter direct manipulation mode because mFocusedNode is no longer "
                         + "in view tree.");
@@ -2268,6 +2286,7 @@ public class RotaryService extends AccessibilityService implements
      */
     private void refreshSavedNodes() {
         mFocusedNode = Utils.refreshNode(mFocusedNode);
+        L.v("After refresh, mFocusedNode is " + mFocusedNode);
         mEditNode = Utils.refreshNode(mEditNode);
         mLastTouchedNode = Utils.refreshNode(mLastTouchedNode);
         mFocusArea = Utils.refreshNode(mFocusArea);
@@ -2438,6 +2457,7 @@ public class RotaryService extends AccessibilityService implements
      */
     private void maybeClearFocusInCurrentWindow(@Nullable AccessibilityNodeInfo targetFocus) {
         mFocusedNode = Utils.refreshNode(mFocusedNode);
+        L.v("After refresh, mFocusedNode is " + mFocusedNode);
         if (mFocusedNode == null
                 // No need to clear focus if mFocusedNode is not focused. However, when it's a node
                 // in a WebView or ComposeView, its state might not be up to date,

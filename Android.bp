@@ -30,7 +30,6 @@ java_library {
     },
     srcs: [":rotary-service-proto-source"],
     installable: false,
-    platform_apis: true,
 }
 
 android_app {
@@ -81,8 +80,6 @@ android_library {
         "tests/unit/res",
         "res",
     ],
-
-    platform_apis: true,
 
     optimize: {
         enabled: false,

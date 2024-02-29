@@ -78,6 +78,11 @@ class SurfaceViewHelper {
         }
     }
 
+    /** Returns whether it supports AAOS template apps. */
+    boolean supportTemplateApp() {
+        return !TextUtils.isEmpty(mHostApp);
+    }
+
     /** Adds the package name of the client app. */
     void addClientApp(@NonNull CharSequence clientAppPackageName) {
         mClientApps.add(clientAppPackageName);
