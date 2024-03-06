@@ -1102,6 +1102,8 @@ public class RotaryServiceTest {
         mRotaryService.onKeyEvents(validDisplayId, Collections.singletonList(nudgeUpEventActionUp));
 
         // It should initialize the focus.
+        Button appDefaultFocus = activity.findViewById(R.id.app_default_focus);
+        assertThat(appDefaultFocus.isFocused()).isTrue();
         AccessibilityNodeInfo appDefaultFocusNode = createNode("app_default_focus");
         assertThat(mRotaryService.getFocusedNode()).isEqualTo(appDefaultFocusNode);
     }
