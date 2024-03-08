@@ -768,6 +768,7 @@ public class RotaryService extends AccessibilityService implements
     @Override
     public void onDestroy() {
         L.v("onDestroy");
+        mExecutor.shutdown();
         unregisterReceiver(mAppInstallUninstallReceiver);
 
         unregisterInputMethodObserver();
@@ -2055,7 +2056,7 @@ public class RotaryService extends AccessibilityService implements
         if (mNavigator.supportTemplateApp()) {
             // Check if there is a SurfaceView node to decide whether the foreground app is an
             // AAOS template app. This is done on background thread to avoid ANR (b/322324727).
-            // TODO: find a better way to solve this to avoid potential race condition.
+            // TODO(b/322324727): find a better way to solve this to avoid potential race condition.
             mExecutor.execute(() -> {
                 // If the foreground app is a client app, store its package name.
                 AccessibilityNodeInfo surfaceView =
