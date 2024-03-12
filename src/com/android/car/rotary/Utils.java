@@ -77,6 +77,8 @@ final class Utils {
     @VisibleForTesting
     static final String SURFACE_VIEW_CLASS_NAME = SurfaceView.class.getName();
 
+    private static final int FIND_FOCUS_MAX_TRY_COUNT = 3;
+
     private Utils() {
     }
 
@@ -450,5 +452,23 @@ final class Utils {
             }
         }
         return false;
+    }
+
+    /** Retries several times to find the focused node. See b/301318227. */
+    @Nullable
+    static AccessibilityNodeInfo findFocusWithRetry(@NonNull AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo focusedNode;
+        for (int i = 0; i < FIND_FOCUS_MAX_TRY_COUNT; i++) {
+            focusedNode = root.findFocus(FOCUS_INPUT);
+            L.v("findFocus():" + focusedNode);
+            focusedNode = Utils.refreshNode(focusedNode);
+            if (focusedNode != null && focusedNode.isFocused()) {
+                return focusedNode;
+            }
+            Utils.recycleNode(focusedNode);
+            L.w("Retry findFocus()");
+        }
+        L.e("Failed to find focused node in " + root);
+        return null;
     }
 }

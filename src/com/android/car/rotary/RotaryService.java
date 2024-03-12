@@ -1645,6 +1645,7 @@ public class RotaryService extends AccessibilityService implements
         // what FocusArea to nudge to. In this case, we'll find a target FocusArea using geometry.
         AccessibilityNodeInfo targetFocusArea =
                 mNavigator.findNudgeTargetFocusArea(windows, mFocusedNode, mFocusArea, direction);
+        L.d("Found targetFocusArea: " + targetFocusArea);
 
         if (targetFocusArea == null) {
             L.d("Failed to find nearest FocusArea for nudge");
@@ -1975,6 +1976,7 @@ public class RotaryService extends AccessibilityService implements
         int direction = clockwise ? View.FOCUS_FORWARD : View.FOCUS_BACKWARD;
         Navigator.FindRotateTargetResult result =
                 mNavigator.findRotateTarget(mFocusedNode, direction, rotationCount);
+        L.d("Found rotation result: " + result);
         if (result != null) {
             if (performFocusAction(result.node)) {
                 remainingRotationCount -= result.advancedCount;
@@ -1983,6 +1985,7 @@ public class RotaryService extends AccessibilityService implements
         } else {
             L.w("Failed to find rotate target from " + mFocusedNode);
         }
+        L.d("mFocusedNode: " + mFocusedNode);
 
         // If navigation didn't consume all of rotationCount and the focused node either is a
         // scrollable container or is a descendant of one, scroll it. The former happens when no
@@ -1992,7 +1995,7 @@ public class RotaryService extends AccessibilityService implements
         // is only supported in the focused window because injected events always go to the focused
         // window. We don't bother checking whether the scrollable container can currently scroll
         // because there's nothing else to do if it can't.
-        if (remainingRotationCount > 0 && isInFocusedWindow(mFocusedNode)) {
+        if (mFocusedNode != null && remainingRotationCount > 0 && isInFocusedWindow(mFocusedNode)) {
             AccessibilityNodeInfo scrollableContainer =
                     mNavigator.findScrollableContainer(mFocusedNode);
             if (scrollableContainer != null) {

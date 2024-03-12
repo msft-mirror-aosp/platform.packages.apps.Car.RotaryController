@@ -317,7 +317,7 @@ class Navigator {
             @NonNull AccessibilityNodeInfo root) {
         AccessibilityNodeInfo surfaceView = null;
         if (!isClientNode(root)) {
-            AccessibilityNodeInfo focusedNode = root.findFocus(FOCUS_INPUT);
+            AccessibilityNodeInfo focusedNode = Utils.findFocusWithRetry(root);
             if (focusedNode != null && Utils.isSurfaceView(focusedNode)) {
                 // The focused node represents a SurfaceView. In this case the root node is actually
                 // a client node but Navigator doesn't know that because SurfaceViewHelper doesn't
