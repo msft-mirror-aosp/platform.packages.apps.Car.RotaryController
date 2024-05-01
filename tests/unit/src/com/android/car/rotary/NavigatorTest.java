@@ -75,7 +75,8 @@ public class NavigatorTest {
 
     @BeforeClass
     public static void oneTimeSetup() {
-        sUiAutomoation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        sUiAutomoation = InstrumentationRegistry.getInstrumentation().getUiAutomation(
+                UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
 
         // FLAG_RETRIEVE_INTERACTIVE_WINDOWS is necessary to reliably access the root window.
         AccessibilityServiceInfo serviceInfo = sUiAutomoation.getServiceInfo();
