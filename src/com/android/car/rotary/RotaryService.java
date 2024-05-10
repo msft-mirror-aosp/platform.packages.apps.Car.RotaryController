@@ -100,7 +100,6 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
-import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.FrameLayout;
 
@@ -615,13 +614,20 @@ public class RotaryService extends AccessibilityService implements
                 Context.MODE_PRIVATE);
         mUserManager = getSystemService(UserManager.class);
 
+        mInputManager = getSystemService(InputManager.class);
+        mInputMethodManager = getSystemService(InputMethodManager.class);
+        if (mInputMethodManager == null) {
+            throw new IllegalStateException("Failed to get InputMethodManager");
+        }
+
         mRotaryInputMethod = res.getString(R.string.rotary_input_method);
         mDefaultTouchInputMethod = res.getString(R.string.default_touch_input_method);
-        mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX + mUserManager.getUserName(),
-                mDefaultTouchInputMethod);
-        if (mRotaryInputMethod != null
-                && mRotaryInputMethod.equals(getCurrentIme())
-                && isInstalledIme(mTouchInputMethod)) {
+        validateImeConfiguration(mDefaultTouchInputMethod);
+        mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX
+                + mUserManager.getUserName(), mDefaultTouchInputMethod);
+        validateImeConfiguration(mTouchInputMethod);
+
+        if (mRotaryInputMethod != null && mRotaryInputMethod.equals(getCurrentIme())) {
             // Switch from the rotary IME to the touch IME in case Android defaults to the rotary
             // IME.
             // TODO(b/169423887): Figure out how to configure the default IME through Android
@@ -666,6 +672,21 @@ public class RotaryService extends AccessibilityService implements
         }
         if (mContentResolver == null) {
             L.w("ContentResolver not available");
+        }
+    }
+
+    /**
+     * Ensure that the IME configuration passed as argument is also available in
+     * {@link InputMethodManager}.
+     *
+     * @throws IllegalStateException if the ime configuration passed as argument is not available
+     *                               in {@link InputMethodManager}
+     */
+    private void validateImeConfiguration(String imeConfiguration) {
+        if (!Utils.isInstalledIme(imeConfiguration, mInputMethodManager)) {
+            throw new IllegalStateException(String.format("%s is not installed (run "
+                            + "`dumpsys input_method` to list all available input methods)",
+                    imeConfiguration));
         }
     }
 
@@ -716,11 +737,6 @@ public class RotaryService extends AccessibilityService implements
 
         updateServiceInfo();
 
-        mInputManager = getSystemService(InputManager.class);
-        mInputMethodManager = getSystemService(InputMethodManager.class);
-        if (mInputMethodManager == null) {
-            L.w("Failed to get InputMethodManager");
-        }
 
         // Add an overlay to capture touch events.
         addTouchOverlay();
@@ -1629,6 +1645,7 @@ public class RotaryService extends AccessibilityService implements
         // what FocusArea to nudge to. In this case, we'll find a target FocusArea using geometry.
         AccessibilityNodeInfo targetFocusArea =
                 mNavigator.findNudgeTargetFocusArea(windows, mFocusedNode, mFocusArea, direction);
+        L.d("Found targetFocusArea: " + targetFocusArea);
 
         if (targetFocusArea == null) {
             L.d("Failed to find nearest FocusArea for nudge");
@@ -1959,6 +1976,7 @@ public class RotaryService extends AccessibilityService implements
         int direction = clockwise ? View.FOCUS_FORWARD : View.FOCUS_BACKWARD;
         Navigator.FindRotateTargetResult result =
                 mNavigator.findRotateTarget(mFocusedNode, direction, rotationCount);
+        L.d("Found rotation result: " + result);
         if (result != null) {
             if (performFocusAction(result.node)) {
                 remainingRotationCount -= result.advancedCount;
@@ -1967,6 +1985,7 @@ public class RotaryService extends AccessibilityService implements
         } else {
             L.w("Failed to find rotate target from " + mFocusedNode);
         }
+        L.d("mFocusedNode: " + mFocusedNode);
 
         // If navigation didn't consume all of rotationCount and the focused node either is a
         // scrollable container or is a descendant of one, scroll it. The former happens when no
@@ -1976,7 +1995,7 @@ public class RotaryService extends AccessibilityService implements
         // is only supported in the focused window because injected events always go to the focused
         // window. We don't bother checking whether the scrollable container can currently scroll
         // because there's nothing else to do if it can't.
-        if (remainingRotationCount > 0 && isInFocusedWindow(mFocusedNode)) {
+        if (mFocusedNode != null && remainingRotationCount > 0 && isInFocusedWindow(mFocusedNode)) {
             AccessibilityNodeInfo scrollableContainer =
                     mNavigator.findScrollableContainer(mFocusedNode);
             if (scrollableContainer != null) {
@@ -2672,7 +2691,8 @@ public class RotaryService extends AccessibilityService implements
         }
     }
 
-    private void setInRotaryMode(boolean inRotaryMode) {
+    @VisibleForTesting
+    void setInRotaryMode(boolean inRotaryMode) {
         mInRotaryMode = inRotaryMode;
         if (!mInRotaryMode) {
             setEditNode(null);
@@ -2699,14 +2719,26 @@ public class RotaryService extends AccessibilityService implements
 
     /** Switches to the rotary IME or the touch IME if needed. */
     private void updateIme() {
-        String newIme = mInRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
-        if (mInRotaryMode && !isInstalledIme(newIme)) {
-            L.w("Rotary IME doesn't exist: " + newIme);
-            return;
+        String newIme;
+        if (mInRotaryMode) {
+            // We're entering Rotary mode, therefore we're setting the rotary IME as the
+            // default IME.
+            newIme = mRotaryInputMethod;
+        } else {
+            String oldIme = getCurrentIme();
+            if (Objects.equals(oldIme, mRotaryInputMethod)) {
+                // Since the previous IME was rotary IME and we're leaving rotary mode, then we
+                // switch back to the Android Auto default IME.
+                newIme = mTouchInputMethod;
+            } else {
+                // Since we're not entering rotary mode and the current keyboard is not the rotary
+                // IME, then there is no need to switch IMEs.
+                return;
+            }
         }
-        String oldIme = getCurrentIme();
-        if (Objects.equals(oldIme, newIme)) {
-            L.v("No need to switch IME: " + newIme);
+
+        if (!Utils.isInstalledIme(newIme, mInputMethodManager)) {
+            L.w("Rotary IME doesn't exist: " + newIme);
             return;
         }
         setCurrentIme(newIme);
@@ -2724,9 +2756,11 @@ public class RotaryService extends AccessibilityService implements
         if (mContentResolver == null) {
             return;
         }
+        String oldIme = getCurrentIme();
+        validateImeConfiguration(newIme);
         boolean result =
                 Settings.Secure.putString(mContentResolver, DEFAULT_INPUT_METHOD, newIme);
-        L.successOrFailure("Switching to IME: " + newIme, result);
+        L.successOrFailure("Switching IME from " + oldIme + " to " + newIme, result);
     }
 
     /**
@@ -2879,25 +2913,6 @@ public class RotaryService extends AccessibilityService implements
         mWindowCache.setNodeCopier(nodeCopier);
     }
 
-    /** Checks if the {@code componentName} is an installed input method. */
-    private boolean isInstalledIme(@Nullable String componentName) {
-        if (TextUtils.isEmpty(componentName) || mInputMethodManager == null) {
-            return false;
-        }
-        // Use getInputMethodList() to get the installed input methods. Don't do that by fetching
-        // ENABLED_INPUT_METHODS and DISABLED_SYSTEM_INPUT_METHODS from the secure setting,
-        // because RotaryIME may not be included in any of them (b/229144904).
-        ComponentName component = ComponentName.unflattenFromString(componentName);
-        List<InputMethodInfo> imeList = mInputMethodManager.getInputMethodList();
-        for (InputMethodInfo ime : imeList) {
-            ComponentName imeComponent = ime.getComponent();
-            if (component.equals(imeComponent)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     @VisibleForTesting
     AccessibilityNodeInfo getFocusedNode() {
         return mFocusedNode;
@@ -2980,5 +2995,4 @@ public class RotaryService extends AccessibilityService implements
                 RotaryProtos.RotaryService.WINDOW_CACHE);
         dumpOutputStream.flush();
     }
-
 }

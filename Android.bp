@@ -30,7 +30,6 @@ java_library {
     },
     srcs: [":rotary-service-proto-source"],
     installable: false,
-    platform_apis: true,
 }
 
 android_app {
@@ -66,11 +65,6 @@ android_app {
         "car-ui-lib",
         "rotary-service-javastream-protos",
     ],
-    product_variables: {
-        pdk: {
-            enabled: false,
-        },
-    },
 }
 
 android_library {
@@ -87,8 +81,6 @@ android_library {
         "res",
     ],
 
-    platform_apis: true,
-
     optimize: {
         enabled: false,
     },
@@ -102,11 +94,6 @@ android_library {
         "car-ui-lib",
         "rotary-service-javastream-protos",
     ],
-    product_variables: {
-        pdk: {
-            enabled: false,
-        },
-    },
 
     aaptflags: ["--extra-packages com.android.car.rotary"],
 }

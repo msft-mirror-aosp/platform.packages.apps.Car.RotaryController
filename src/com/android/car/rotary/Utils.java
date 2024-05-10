@@ -30,11 +30,15 @@ import static com.android.car.ui.utils.RotaryConstants.ROTARY_HORIZONTALLY_SCROL
 import static com.android.car.ui.utils.RotaryConstants.ROTARY_VERTICALLY_SCROLLABLE;
 import static com.android.car.ui.utils.RotaryConstants.TOP_BOUND_OFFSET_FOR_NUDGE;
 
+import android.content.ComponentName;
 import android.graphics.Rect;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.view.SurfaceView;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
+import android.view.inputmethod.InputMethodInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebView;
 
 import androidx.annotation.NonNull;
@@ -72,6 +76,8 @@ final class Utils {
     static final String COMPOSE_VIEW_CLASS_NAME = "androidx.compose.ui.platform.ComposeView";
     @VisibleForTesting
     static final String SURFACE_VIEW_CLASS_NAME = SurfaceView.class.getName();
+
+    private static final int FIND_FOCUS_MAX_TRY_COUNT = 3;
 
     private Utils() {
     }
@@ -425,6 +431,44 @@ final class Utils {
             ancestor.recycle();
             ancestor = nextAncestor;
         }
+        return null;
+    }
+
+    /** Checks if the {@code componentName} is an installed input method. */
+    static boolean isInstalledIme(@Nullable String componentName,
+            @NonNull InputMethodManager imm) {
+        if (TextUtils.isEmpty(componentName)) {
+            return false;
+        }
+        // Use getInputMethodList() to get the installed input methods. Don't do that by fetching
+        // ENABLED_INPUT_METHODS and DISABLED_SYSTEM_INPUT_METHODS from the secure setting,
+        // because RotaryIME may not be included in any of them (b/229144904).
+        ComponentName component = ComponentName.unflattenFromString(componentName);
+        List<InputMethodInfo> imeList = imm.getInputMethodList();
+        for (InputMethodInfo ime : imeList) {
+            ComponentName imeComponent = ime.getComponent();
+            if (component.equals(imeComponent)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Retries several times to find the focused node. See b/301318227. */
+    @Nullable
+    static AccessibilityNodeInfo findFocusWithRetry(@NonNull AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo focusedNode;
+        for (int i = 0; i < FIND_FOCUS_MAX_TRY_COUNT; i++) {
+            focusedNode = root.findFocus(FOCUS_INPUT);
+            L.v("findFocus():" + focusedNode);
+            focusedNode = Utils.refreshNode(focusedNode);
+            if (focusedNode != null && focusedNode.isFocused()) {
+                return focusedNode;
+            }
+            Utils.recycleNode(focusedNode);
+            L.w("Retry findFocus()");
+        }
+        L.e("Failed to find focused node in " + root);
         return null;
     }
 }
