@@ -111,6 +111,11 @@ class Navigator {
         mSurfaceViewHelper.clearHostApp(packageName);
     }
 
+    /** Returns whether it supports AAOS template apps. */
+    boolean supportTemplateApp() {
+        return mSurfaceViewHelper.supportTemplateApp();
+    }
+
     /** Adds the package name of the client app. */
     void addClientApp(@NonNull CharSequence clientAppPackageName) {
         mSurfaceViewHelper.addClientApp(clientAppPackageName);
@@ -185,7 +190,8 @@ class Navigator {
             //    area),
             // 3. and nextCandidate is different from candidate (if sourceNode is the first
             //    focusable node in the window, searching backward will return sourceNode itself).
-            if (nextCandidate != null && currentFocusArea.equals(candidateFocusArea)
+            if (nextCandidate != null && currentFocusArea != null
+                    && currentFocusArea.equals(candidateFocusArea)
                     && !Utils.isFocusParkingView(nextCandidate)
                     && !nextCandidate.equals(candidate)) {
                 // We need to skip nextTargetNode if:
@@ -235,7 +241,6 @@ class Navigator {
                 break;
             }
         }
-        currentFocusArea.recycle();
         candidate.recycle();
         if (sourceNode.equals(target)) {
             L.e("Wrap-around on the same node");
@@ -439,9 +444,27 @@ class Navigator {
         // If the current focus area is an explicit focus area, use its focus area bounds to find
         // nudge target as usual. Otherwise, use the tailored bounds, which was added as the last
         // element of the list in maybeAddImplicitFocusArea().
-        Rect currentFocusAreaBounds = Utils.isFocusArea(currentFocusArea)
-                ? Utils.getBoundsInScreen(currentFocusArea)
-                : candidateFocusAreasBounds.get(candidateFocusAreasBounds.size() - 1);
+        Rect currentFocusAreaBounds;
+        if (Utils.isFocusArea(currentFocusArea)) {
+            currentFocusAreaBounds = Utils.getBoundsInScreen(currentFocusArea);
+        } else if (candidateFocusAreasBounds.size() > 0) {
+            currentFocusAreaBounds =
+                    candidateFocusAreasBounds.get(candidateFocusAreasBounds.size() - 1);
+        } else {
+            // TODO(b/323112198): this should never happen, but let's try to recover from this.
+            L.e("currentFocusArea is an implicit focus area but not added to"
+                    + " currentFocusAreaBounds");
+            L.d("sourceNode:" + sourceNode);
+            L.d("currentFocusArea:" + currentFocusArea);
+            AccessibilityNodeInfo root = getRoot(sourceNode);
+            Utils.printDescendants(root, Utils.LOG_INDENT);
+            Utils.recycleNode(root);
+
+            currentFocusArea.recycle();
+            currentFocusArea = getAncestorFocusArea(sourceNode);
+            currentFocusAreaBounds = Utils.getBoundsInScreen(currentFocusArea);
+            L.d("updated currentFocusArea:" + currentFocusArea);
+        }
 
         if (currentWindow.getType() != TYPE_INPUT_METHOD
                 || shouldNudgeOutOfIme(sourceNode, currentFocusArea, candidateFocusAreas,
@@ -972,7 +995,8 @@ class Navigator {
         };
         AccessibilityNodeInfo result = mTreeTraverser.findNodeOrAncestor(node, isFocusAreaOrRoot);
         if (result == null || !Utils.isFocusArea(result)) {
-            L.w("Couldn't find ancestor focus area for given node: " + node);
+            L.w("Ancestor focus area for node " + node + " is not an explicit FocusArea: "
+                    + result);
         }
         return result;
     }
