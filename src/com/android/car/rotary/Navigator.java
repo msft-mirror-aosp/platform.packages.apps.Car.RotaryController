@@ -1018,6 +1018,16 @@ class Navigator {
     }
 
     /**
+     * Returns a copy of {@code node} or the ancestor that represents a {@code ComposeView}.
+     * Returns null if {@code node} isn't a {@code ComposeView} and isn't a descendant of a {@code
+     * ComposeView}.
+     */
+    @Nullable
+    private AccessibilityNodeInfo findComposeViewAncestor(@NonNull AccessibilityNodeInfo node) {
+        return mTreeTraverser.findNodeOrAncestor(node, Utils::isComposeView);
+    }
+
+    /**
      * Returns a copy of {@code node} or the nearest ancestor that represents a {@code ComposeView}
      * or a {@code WebView}. Returns null if {@code node} isn't a {@code ComposeView} or a
      * {@code WebView} and is not a descendant of a {@code ComposeView} or a {@code WebView}.
@@ -1037,6 +1047,16 @@ class Navigator {
             return false;
         }
         webView.recycle();
+        return true;
+    }
+
+    /** Returns whether the {@code node} represents a Jetpack Composable. */
+    boolean isComposable(@NonNull AccessibilityNodeInfo node) {
+        AccessibilityNodeInfo composeView = findComposeViewAncestor(node);
+        if (composeView == null) {
+            return false;
+        }
+        composeView.recycle();
         return true;
     }
 
