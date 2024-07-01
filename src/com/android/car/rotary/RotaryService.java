@@ -1761,7 +1761,7 @@ public class RotaryService extends AccessibilityService implements
         // targetFocusArea is an explicit FocusArea (i.e., an instance of the FocusArea class), so
         // perform ACTION_FOCUS on it. The FocusArea will handle this by focusing one of its
         // descendants.
-        if (Utils.isFocusArea(targetFocusArea)) {
+        if (Utils.isFocusArea(targetFocusArea) && !mNavigator.isComposable(targetFocusArea)) {
             arguments.clear();
             arguments.putInt(NUDGE_DIRECTION, direction);
             boolean success = performFocusAction(targetFocusArea, arguments);
@@ -1772,19 +1772,25 @@ public class RotaryService extends AccessibilityService implements
 
         // targetFocusArea is an implicit focus area, which means there is no explicit focus areas
         // or the implicit focus area is better than any other explicit focus areas. In this case,
-        // focus on the first orphan view.
+        // focus on the first focusable node.
         // Don't call restoreDefaultFocusInRoot(targetFocusArea), because it usually focuses on the
         // first focusable view in the view tree, which might be wrapped inside an explicit focus
         // area.
-        AccessibilityNodeInfo firstOrphan = mNavigator.findFirstOrphan(targetFocusArea);
-        if (firstOrphan == null) {
+        AccessibilityNodeInfo nodeToFocus = Utils.isFocusArea(targetFocusArea)
+                // targetFocusArea represents a Composable with AccessibilityClassName being
+                // "com.android.car.ui.FocusArea".
+                // TODO(b/366081548): add a unit test.
+                ? mNavigator.findFirstFocusableDescendant(targetFocusArea)
+                // targetFocusArea is an implicit focus area, or there is an orphan view.
+                : mNavigator.findFirstOrphan(targetFocusArea);
+        if (nodeToFocus == null) {
             // This shouldn't happen because a focus area without focusable descendants can't be
             // the target focus area.
             L.e("No focusable node in " + targetFocusArea);
             return;
         }
-        boolean success = performFocusAction(firstOrphan);
-        firstOrphan.recycle();
+        boolean success = performFocusAction(nodeToFocus);
+        nodeToFocus.recycle();
         L.successOrFailure("Nudging to the nearest implicit focus area " + targetFocusArea,
                 success);
         targetFocusArea.recycle();
@@ -2586,9 +2592,7 @@ public class RotaryService extends AccessibilityService implements
         }
         // Don't call performFocusAction(fpv) because it might cause infinite loop (b/322137915).
         boolean result = fpv.performAction(ACTION_FOCUS);
-        if (!result) {
-            L.w("Failed to perform ACTION_FOCUS on " + fpv);
-        }
+        L.successOrFailure("Perform ACTION_FOCUS on FocusParkingView:" + fpv, result);
         fpv.recycle();
         return result;
     }
