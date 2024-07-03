@@ -631,12 +631,13 @@ public class RotaryService extends AccessibilityService implements
         validateImeConfiguration(mDefaultTouchInputMethod);
         mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX
                 + mUserManager.getUserName(), mDefaultTouchInputMethod);
-        if (mTouchInputMethod.isEmpty()) {
+        // TODO(b/346437360): use a better way to initialize mTouchInputMethod.
+        if (mTouchInputMethod.isEmpty()
+                || !Utils.isInstalledIme(mTouchInputMethod, mInputMethodManager)) {
             // Workaround for b/323013736.
-            L.e("mTouchInputMethod shouldn't be empty!");
+            L.e("mTouchInputMethod is empty or not installed!");
             mTouchInputMethod = mDefaultTouchInputMethod;
         }
-        validateImeConfiguration(mTouchInputMethod);
 
         if (mRotaryInputMethod != null && mRotaryInputMethod.equals(getCurrentIme())) {
             // Switch from the rotary IME to the touch IME in case Android defaults to the rotary
