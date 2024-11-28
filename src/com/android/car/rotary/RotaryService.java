@@ -592,6 +592,13 @@ public class RotaryService extends AccessibilityService implements
     public void onCreate() {
         L.v("onCreate");
         super.onCreate();
+        if (getBaseContext() != null) {
+            mContentResolver = getContentResolver();
+        }
+        if (mContentResolver == null) {
+            L.w("ContentResolver not available");
+        }
+
         Resources res = getResources();
         mRotationAcceleration3xMs = res.getInteger(R.integer.rotation_acceleration_3x_ms);
         mRotationAcceleration2xMs = res.getInteger(R.integer.rotation_acceleration_2x_ms);
@@ -678,13 +685,6 @@ public class RotaryService extends AccessibilityService implements
         filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         filter.addDataScheme("package");
         registerReceiver(mAppInstallUninstallReceiver, filter);
-
-        if (getBaseContext() != null) {
-            mContentResolver = getContentResolver();
-        }
-        if (mContentResolver == null) {
-            L.w("ContentResolver not available");
-        }
     }
 
     /**
