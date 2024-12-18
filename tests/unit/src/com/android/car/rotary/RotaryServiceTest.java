@@ -100,7 +100,8 @@ public class RotaryServiceTest {
 
     @BeforeClass
     public static void setUpClass() {
-        sUiAutomation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        sUiAutomation = InstrumentationRegistry.getInstrumentation().getUiAutomation(
+                UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
 
         // FLAG_RETRIEVE_INTERACTIVE_WINDOWS is necessary to reliably access the root window.
         AccessibilityServiceInfo serviceInfo = sUiAutomation.getServiceInfo();

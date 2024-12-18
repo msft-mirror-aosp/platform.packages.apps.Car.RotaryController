@@ -592,6 +592,13 @@ public class RotaryService extends AccessibilityService implements
     public void onCreate() {
         L.v("onCreate");
         super.onCreate();
+        if (getBaseContext() != null) {
+            mContentResolver = getContentResolver();
+        }
+        if (mContentResolver == null) {
+            L.w("ContentResolver not available");
+        }
+
         Resources res = getResources();
         mRotationAcceleration3xMs = res.getInteger(R.integer.rotation_acceleration_3x_ms);
         mRotationAcceleration2xMs = res.getInteger(R.integer.rotation_acceleration_2x_ms);
@@ -631,12 +638,13 @@ public class RotaryService extends AccessibilityService implements
         validateImeConfiguration(mDefaultTouchInputMethod);
         mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX
                 + mUserManager.getUserName(), mDefaultTouchInputMethod);
-        if (mTouchInputMethod.isEmpty()) {
+        // TODO(b/346437360): use a better way to initialize mTouchInputMethod.
+        if (mTouchInputMethod.isEmpty()
+                || !Utils.isInstalledIme(mTouchInputMethod, mInputMethodManager)) {
             // Workaround for b/323013736.
-            L.e("mTouchInputMethod shouldn't be empty!");
+            L.e("mTouchInputMethod is empty or not installed!");
             mTouchInputMethod = mDefaultTouchInputMethod;
         }
-        validateImeConfiguration(mTouchInputMethod);
 
         if (mRotaryInputMethod != null && mRotaryInputMethod.equals(getCurrentIme())) {
             // Switch from the rotary IME to the touch IME in case Android defaults to the rotary
@@ -677,13 +685,6 @@ public class RotaryService extends AccessibilityService implements
         filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         filter.addDataScheme("package");
         registerReceiver(mAppInstallUninstallReceiver, filter);
-
-        if (getBaseContext() != null) {
-            mContentResolver = getContentResolver();
-        }
-        if (mContentResolver == null) {
-            L.w("ContentResolver not available");
-        }
     }
 
     /**
@@ -768,6 +769,7 @@ public class RotaryService extends AccessibilityService implements
     @Override
     public void onDestroy() {
         L.v("onDestroy");
+        mExecutor.shutdown();
         unregisterReceiver(mAppInstallUninstallReceiver);
 
         unregisterInputMethodObserver();
@@ -2055,7 +2057,7 @@ public class RotaryService extends AccessibilityService implements
         if (mNavigator.supportTemplateApp()) {
             // Check if there is a SurfaceView node to decide whether the foreground app is an
             // AAOS template app. This is done on background thread to avoid ANR (b/322324727).
-            // TODO: find a better way to solve this to avoid potential race condition.
+            // TODO(b/322324727): find a better way to solve this to avoid potential race condition.
             mExecutor.execute(() -> {
                 // If the foreground app is a client app, store its package name.
                 AccessibilityNodeInfo surfaceView =

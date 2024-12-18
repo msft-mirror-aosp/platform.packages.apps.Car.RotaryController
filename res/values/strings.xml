@@ -18,7 +18,10 @@
     <!-- Component name of default touch IME. This resource should be overlaid if a device uses an
          IME other than CarLatinIME. This resource should not be empty. -->
     <string name="default_touch_input_method" translatable="false">com.android.inputmethod.latin/.CarLatinIME</string>
-    <!-- Component name of rotary IME. Empty if none. -->
+    <!-- Component name of rotary IME. Empty if none. The value must be different from
+         default_touch_input_method.
+         If the value is not empty, this IME will be only used in rotary mode; otherwise, touch IME
+         will be used in both touch mode and rotary mode.  -->
     <string name="rotary_input_method" translatable="false"></string>
 
     <!-- Intents to launch an activity when the user nudges up, down, left, or right off the edge of
