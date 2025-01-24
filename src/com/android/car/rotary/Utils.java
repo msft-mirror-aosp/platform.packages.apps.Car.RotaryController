@@ -463,7 +463,9 @@ final class Utils {
             focusedNode = root.findFocus(FOCUS_INPUT);
             L.v("findFocus():" + focusedNode);
             focusedNode = Utils.refreshNode(focusedNode);
-            if (focusedNode != null && focusedNode.isFocused()) {
+            // The WebView might be focused but the node representing the WebView may not update
+            // the focused state correctly. See b/391683257.
+            if (focusedNode != null && (focusedNode.isFocused() || isWebView(focusedNode))) {
                 return focusedNode;
             }
             Utils.recycleNode(focusedNode);

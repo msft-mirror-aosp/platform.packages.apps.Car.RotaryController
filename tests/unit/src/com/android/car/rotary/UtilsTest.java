@@ -16,6 +16,10 @@
 
 package com.android.car.rotary;
 
+import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
+
+import static com.android.car.rotary.Utils.WEB_VIEW_CLASS_NAME;
+
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.mockito.Mockito.mock;
@@ -93,5 +97,18 @@ public final class UtilsTest {
         when(mMockedInputMethodManager.getInputMethodList()).thenReturn(availableInputMethods);
 
         assertThat(Utils.isInstalledIme("blah/someIme", mMockedInputMethodManager)).isTrue();
+    }
+
+    @Test
+    public void findFocusWithRetry_WebViewIsFocused() {
+        AccessibilityNodeInfo root = mock(AccessibilityNodeInfo.class);
+        AccessibilityNodeInfo webView = mock(AccessibilityNodeInfo.class);
+        when(webView.refresh()).thenReturn(true);
+        when(webView.getClassName()).thenReturn(WEB_VIEW_CLASS_NAME);
+        // In b/391683257, the WebView is focused but the associated node is not.
+        when(webView.isFocused()).thenReturn(false);
+        when(root.findFocus(FOCUS_INPUT)).thenReturn(webView);
+
+        assertThat(Utils.findFocusWithRetry(root)).isEqualTo(webView);
     }
 }
