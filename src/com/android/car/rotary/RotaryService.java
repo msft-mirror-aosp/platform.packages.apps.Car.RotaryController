@@ -971,7 +971,9 @@ public class RotaryService extends AccessibilityService implements
 
         // Set mFocusedNode to null when user uses touch.
         if (mFocusedNode != null) {
-            setFocusedNode(null);
+            // Don't call setFocusedNode(), otherwise it will move focus to the FocusParkingView
+            // unnecessarily.
+            setFocusedNodeInternal(null);
         }
     }
 
