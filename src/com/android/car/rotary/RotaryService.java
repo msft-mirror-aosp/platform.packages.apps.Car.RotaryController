@@ -100,7 +100,9 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
+import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.InputMethodSubtype;
 import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
@@ -202,6 +204,8 @@ public class RotaryService extends AccessibilityService implements
     private static final int INVALID_GLOBAL_ACTION = -1;
 
     private static final int NUM_DIRECTIONS = 4;
+
+    private static final String INPUT_METHOD_SUBTYPE_MODE_KEYBOARD = "keyboard";
 
     /**
      * Maps a direction to a string used to look up an off-screen nudge action in an activity's
@@ -625,10 +629,12 @@ public class RotaryService extends AccessibilityService implements
         }
 
         mRotaryInputMethod = res.getString(R.string.rotary_input_method);
-        mDefaultTouchInputMethod = res.getString(R.string.default_touch_input_method);
+        mDefaultTouchInputMethod = getDefaultTouchInputMethod(res, mInputMethodManager);
+        if (mDefaultTouchInputMethod == null) {
+            throw new IllegalStateException("No touch IME installed");
+        }
         L.d("mRotaryInputMethod:" + mRotaryInputMethod + ", mDefaultTouchInputMethod:"
                 + mDefaultTouchInputMethod);
-        validateImeConfiguration(mDefaultTouchInputMethod);
         mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX
                 + mUserManager.getUserName(), mDefaultTouchInputMethod);
         // TODO(b/346437360): use a better way to initialize mTouchInputMethod.
@@ -700,6 +706,33 @@ public class RotaryService extends AccessibilityService implements
                             + "`dumpsys input_method` to list all available input methods)",
                     imeConfiguration));
         }
+    }
+
+    @Nullable
+    private String getDefaultTouchInputMethod(Resources res, InputMethodManager imm) {
+        String defaultTouchInputMethod = res.getString(R.string.default_touch_input_method);
+        if (Utils.isInstalledIme(defaultTouchInputMethod, imm)) {
+            return defaultTouchInputMethod;
+        }
+        // Two possible causes for this error:
+        // 1. R.string.default_touch_input_method is not overlaid correctly.
+        //    TODO(b/346614942): get rid of the overlay
+        // 2. it is overlaid correctly but defaultTouchInputMethod is not installed
+        // To work around it, choose the first enabled IME with mode "keyboard".
+        L.e(String.format("default_touch_input_method is configured to %s but it is not installed!"
+                        + " (run `dumpsys input_method` to list all available input methods)",
+                defaultTouchInputMethod));
+        List<InputMethodInfo> enabledImes = imm.getEnabledInputMethodList();
+        for (InputMethodInfo imi : enabledImes) {
+            List<InputMethodSubtype> subtypes = imm.getEnabledInputMethodSubtypeList(imi,
+                    /* allowsImplicitlyEnabledSubtypes= */ true);
+            for (InputMethodSubtype subtype : subtypes) {
+                if (INPUT_METHOD_SUBTYPE_MODE_KEYBOARD.equals(subtype.getMode())) {
+                    return imi.getComponent().flattenToShortString();
+                }
+            }
+        }
+        return null;
     }
 
     /**
