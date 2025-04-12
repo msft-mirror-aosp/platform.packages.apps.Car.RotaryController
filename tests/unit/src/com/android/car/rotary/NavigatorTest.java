@@ -60,7 +60,7 @@ public class NavigatorTest {
     private static final String HOST_APP_PACKAGE_NAME = "host.app.package.name";
     private static final String CLIENT_APP_PACKAGE_NAME = "client.app.package.name";
 
-    private static UiAutomation sUiAutomoation;
+    private static UiAutomation sUiAutomation;
     private static int sOriginalFlags;
 
     private final List<AccessibilityNodeInfo> mNodes = new ArrayList<>();
@@ -75,21 +75,21 @@ public class NavigatorTest {
 
     @BeforeClass
     public static void oneTimeSetup() {
-        sUiAutomoation = InstrumentationRegistry.getInstrumentation().getUiAutomation(
+        sUiAutomation = InstrumentationRegistry.getInstrumentation().getUiAutomation(
                 UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
 
         // FLAG_RETRIEVE_INTERACTIVE_WINDOWS is necessary to reliably access the root window.
-        AccessibilityServiceInfo serviceInfo = sUiAutomoation.getServiceInfo();
+        AccessibilityServiceInfo serviceInfo = sUiAutomation.getServiceInfo();
         sOriginalFlags = serviceInfo.flags;
         serviceInfo.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
-        sUiAutomoation.setServiceInfo(serviceInfo);
+        sUiAutomation.setServiceInfo(serviceInfo);
     }
 
     @AfterClass
     public static void oneTimeTearDown() {
-        AccessibilityServiceInfo serviceInfo = sUiAutomoation.getServiceInfo();
+        AccessibilityServiceInfo serviceInfo = sUiAutomation.getServiceInfo();
         serviceInfo.flags = sOriginalFlags;
-        sUiAutomoation.setServiceInfo(serviceInfo);
+        sUiAutomation.setServiceInfo(serviceInfo);
     }
 
     @Before
@@ -368,7 +368,7 @@ public class NavigatorTest {
 
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
 
-        AccessibilityNodeInfo windowRoot = sUiAutomoation.getRootInActiveWindow();
+        AccessibilityNodeInfo windowRoot = sUiAutomation.getRootInActiveWindow();
         AccessibilityNodeInfo button1 = createNode("button1");
         AccessibilityNodeInfo scrollable = createNode("scrollable");
 
@@ -1930,8 +1930,7 @@ public class NavigatorTest {
     private void initActivity(@LayoutRes int layoutResId) {
         mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
         mActivityRule.launchActivity(mIntent);
-
-        mWindowRoot = sUiAutomoation.getRootInActiveWindow();
+        PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
     }
 
     /**

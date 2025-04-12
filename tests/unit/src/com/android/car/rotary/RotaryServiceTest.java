@@ -2302,7 +2302,7 @@ public class RotaryServiceTest {
     private void initActivity(@LayoutRes int layoutResId) {
         mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
         mActivityRule.launchActivity(mIntent);
-        mWindowRoot = sUiAutomation.getRootInActiveWindow();
+        PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
     }
 
     /**
