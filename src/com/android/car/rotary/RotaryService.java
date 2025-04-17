@@ -206,6 +206,7 @@ public class RotaryService extends AccessibilityService implements
     private static final int NUM_DIRECTIONS = 4;
 
     private static final String INPUT_METHOD_SUBTYPE_MODE_KEYBOARD = "keyboard";
+    private static final String INPUT_METHOD_SUBTYPE_MODE_ROTARY = "rotary";
 
     /**
      * Maps a direction to a string used to look up an off-screen nudge action in an activity's
@@ -635,7 +636,7 @@ public class RotaryService extends AccessibilityService implements
             throw new IllegalStateException("Failed to get InputMethodManager");
         }
 
-        mRotaryInputMethod = res.getString(R.string.rotary_input_method);
+        mRotaryInputMethod = getRotaryInputMethod(mInputMethodManager);
         mDefaultTouchInputMethod = getDefaultTouchInputMethod(res, mInputMethodManager);
         if (mDefaultTouchInputMethod == null) {
             throw new IllegalStateException("No touch IME installed");
@@ -728,6 +729,23 @@ public class RotaryService extends AccessibilityService implements
                     /* allowsImplicitlyEnabledSubtypes= */ true);
             for (InputMethodSubtype subtype : subtypes) {
                 if (INPUT_METHOD_SUBTYPE_MODE_KEYBOARD.equals(subtype.getMode())) {
+                    return imi.getComponent().flattenToShortString();
+                }
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private String getRotaryInputMethod(InputMethodManager imm) {
+        // getInputMethodList() is used rather than getEnabledInputMethodList() because the Rotary
+        // IME could be installed on the system but not actively enabled.
+        List<InputMethodInfo> installedImes = imm.getInputMethodList();
+        for (InputMethodInfo imi : installedImes) {
+            List<InputMethodSubtype> subtypes = imm.getEnabledInputMethodSubtypeList(imi,
+                    /* allowsImplicitlyEnabledSubtypes= */ true);
+            for (InputMethodSubtype subtype : subtypes) {
+                if (INPUT_METHOD_SUBTYPE_MODE_ROTARY.equals(subtype.getMode())) {
                     return imi.getComponent().flattenToShortString();
                 }
             }

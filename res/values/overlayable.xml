@@ -30,7 +30,6 @@ REGENERATE USING packages/apps/Car/tests/tools/rro/generate-overlayable.py
       <item type="integer" name="rotation_acceleration_2x_ms"/>
       <item type="integer" name="rotation_acceleration_3x_ms"/>
       <item type="string" name="default_touch_input_method"/>
-      <item type="string" name="rotary_input_method"/>
     </policy>
   </overlayable>
 </resources>
