@@ -953,7 +953,8 @@ class Navigator {
                         return false;
                     }
                     // The node represents a focusable view in a focus area, so check the geometry.
-                    return FocusFinder.isCandidate(sourceBounds, nodeBounds, direction);
+                    Rect candidateBounds = Utils.getBoundsInScreen(candidateNode);
+                    return FocusFinder.isCandidate(sourceBounds, candidateBounds, direction);
                 });
         if (candidate == null) {
             return false;

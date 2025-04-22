@@ -1062,6 +1062,7 @@ public class NavigatorTest {
         Rect imeWindowBounds = new Rect(0,528, 1080, 600);
         AccessibilityNodeInfo imeRoot = mNodeBuilder
                 .setBoundsInScreen(imeWindowBounds)
+                .setFocusable(false)
                 .build();
         AccessibilityWindowInfo imeWindow = new WindowBuilder()
                 .setRoot(imeRoot)
@@ -1350,6 +1351,64 @@ public class NavigatorTest {
         AccessibilityNodeInfo targetFocusArea =
                 mNavigator.findNudgeTargetFocusArea(windows, view1, focusArea, View.FOCUS_RIGHT);
         assertThat(targetFocusArea).isEqualTo(root);
+    }
+
+    /**
+     * Tests {@link Navigator#findNudgeTargetFocusArea} in the following layout:
+     *
+     * <pre>
+     *
+     *    ===============focus area1=================
+     *    =  ............                           =
+     *    =  . view1    .                           =
+     *    =  ............                           =
+     *    =   ===============focus area2=========   =
+     *    =   =  ..........                     =   =
+     *    =   =  . view2  .                     =   =
+     *    =   =  ..........                     =   =
+     *    =   ===================================   =
+     *    =                                         =
+     *    ===========================================
+     *</pre>
+     *
+     */
+    @Test
+    public void testFindNudgeTargetFocusArea7() {
+        Rect windowBounds = new Rect(0, 0, 1080, 600);
+        AccessibilityNodeInfo windowRoot = mNodeBuilder
+                .setBoundsInScreen(windowBounds)
+                .build();
+        AccessibilityWindowInfo window = new WindowBuilder()
+                .setRoot(windowRoot)
+                .setBoundsInScreen(windowBounds)
+                .build();
+        AccessibilityNodeInfo focusArea1 = mNodeBuilder
+                .setBoundsInScreen(windowBounds)
+                .setFocusArea()
+                .setParent(windowRoot)
+                .build();
+        AccessibilityNodeInfo view1 = mNodeBuilder
+                .setParent(focusArea1)
+                .setBoundsInScreen(new Rect(0, 0, 10, 10))
+                .build();
+        AccessibilityNodeInfo focusArea2 = mNodeBuilder
+                .setBoundsInScreen(new Rect(0, 100, 1080, 200))
+                .setFocusArea()
+                .setParent(windowRoot)
+                .build();
+        AccessibilityNodeInfo view2 = mNodeBuilder
+                .setParent(focusArea2)
+                .setBoundsInScreen(new Rect(0, 100, 10, 110))
+                .setWindow(window)
+                .build();
+
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(window);
+
+        // Nudge up from view2 in Dialog focusArea2, the focus should move to focusArea1.
+        AccessibilityNodeInfo targetFocusArea =
+                mNavigator.findNudgeTargetFocusArea(windows, view2, focusArea2, View.FOCUS_UP);
+        assertThat(targetFocusArea).isEqualTo(focusArea1);
     }
 
     /**
