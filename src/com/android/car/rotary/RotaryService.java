@@ -125,6 +125,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
@@ -637,10 +638,7 @@ public class RotaryService extends AccessibilityService implements
         }
 
         mRotaryInputMethod = getRotaryInputMethod(mInputMethodManager);
-        mDefaultTouchInputMethod = getDefaultTouchInputMethod(res, mInputMethodManager);
-        if (mDefaultTouchInputMethod == null) {
-            throw new IllegalStateException("No touch IME installed");
-        }
+        mDefaultTouchInputMethod = getDefaultTouchInputMethod(mInputMethodManager);
         L.d("mRotaryInputMethod:" + mRotaryInputMethod + ", mDefaultTouchInputMethod:"
                 + mDefaultTouchInputMethod);
         mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX
@@ -704,36 +702,62 @@ public class RotaryService extends AccessibilityService implements
     private void validateImeConfiguration(String imeConfiguration) {
         if (!Utils.isInstalledIme(imeConfiguration, mInputMethodManager)) {
             throw new IllegalStateException(String.format("%s is not installed (run "
-                            + "`dumpsys input_method` to list all available input methods)",
+                            + "`adb shell ime list -a -s` to list all installed input methods)",
                     imeConfiguration));
         }
     }
 
-    @Nullable
-    private String getDefaultTouchInputMethod(Resources res, InputMethodManager imm) {
-        String defaultTouchInputMethod = res.getString(R.string.default_touch_input_method);
-        if (Utils.isInstalledIme(defaultTouchInputMethod, imm)) {
-            return defaultTouchInputMethod;
-        }
-        // Two possible causes for this error:
-        // 1. R.string.default_touch_input_method is not overlaid correctly.
-        //    TODO(b/346614942): get rid of the overlay
-        // 2. it is overlaid correctly but defaultTouchInputMethod is not installed
-        // To work around it, choose the first enabled IME with mode "keyboard".
-        L.e(String.format("default_touch_input_method is configured to %s but it is not installed!"
-                        + " (run `dumpsys input_method` to list all available input methods)",
-                defaultTouchInputMethod));
+    /**
+     * Similar to IMMS's default IME selection, this method selects an enabled IMEs as follows:
+     * First, it seeks a system non-auxiliary IME with system language subtype and "keyboard"
+     * layout. If unavailable, it defaults to the first system non-auxiliary IME.
+     * If that also isn't found, it selects the very first IME in the enabled list.
+     */
+    @NonNull
+    private static String getDefaultTouchInputMethod(InputMethodManager imm) {
         List<InputMethodInfo> enabledImes = imm.getEnabledInputMethodList();
-        for (InputMethodInfo imi : enabledImes) {
-            List<InputMethodSubtype> subtypes = imm.getEnabledInputMethodSubtypeList(imi,
-                    /* allowsImplicitlyEnabledSubtypes= */ true);
-            for (InputMethodSubtype subtype : subtypes) {
-                if (INPUT_METHOD_SUBTYPE_MODE_KEYBOARD.equals(subtype.getMode())) {
-                    return imi.getComponent().flattenToShortString();
-                }
+        if (enabledImes == null || enabledImes.isEmpty()) {
+            throw new IllegalStateException(
+                    "No IME enabled! Run `adb shell ime list -s` to list installed input methods ");
+        }
+        // We'd prefer to fall back on a system IME, since that is safer.
+        int i = enabledImes.size();
+        int firstFoundSystemIme = -1;
+        Locale systemLocale = Resources.getSystem().getConfiguration().getLocales().get(0);
+        while (i > 0) {
+            i--;
+            InputMethodInfo imi = enabledImes.get(i);
+            if (imi.isAuxiliaryIme()) {
+                continue;
+            }
+            if (imi.isSystem()
+                    && containsSubtypeOf(imi, systemLocale, INPUT_METHOD_SUBTYPE_MODE_KEYBOARD)) {
+                L.v("Found default touch IME:" + imi);
+                return imi.getComponent().flattenToShortString();
+            }
+            if (firstFoundSystemIme < 0 && imi.isSystem()) {
+                firstFoundSystemIme = i;
+                L.v("Default to system non-auxiliary IME");
             }
         }
-        return null;
+        InputMethodInfo imi = enabledImes.get(Math.max(firstFoundSystemIme, 0));
+        return imi.getComponent().flattenToShortString();
+    }
+
+    private static boolean containsSubtypeOf(@NonNull InputMethodInfo imi, @NonNull Locale locale,
+            @NonNull String mode) {
+        for (int i = 0; i < imi.getSubtypeCount(); ++i) {
+            final InputMethodSubtype subtype = imi.getSubtypeAt(i);
+            if (!subtype.getMode().equals(mode)) {
+                continue;
+            }
+            // Ignore country and check language only.
+            String language = locale.getLanguage();
+            if (subtype.getLocaleObject().getLanguage().equals(language)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Nullable

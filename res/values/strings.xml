@@ -15,10 +15,6 @@
   ~ limitations under the License.
   -->
 <resources>
-    <!-- Component name of default touch IME. This resource should be overlaid if a device uses an
-         IME other than CarLatinIME. This resource should not be empty. -->
-    <string name="default_touch_input_method" translatable="false">com.android.inputmethod.latin/.CarLatinIME</string>
-
     <!-- Intents to launch an activity when the user nudges up, down, left, or right off the edge of
          the screen. No activity is launched if the relevant element of this array is empty. -->
     <string-array name="off_screen_nudge_intents" translatable="false">
