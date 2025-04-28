@@ -17,7 +17,6 @@ package com.android.car.rotary;
 
 import static android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS;
 import static android.car.settings.CarSettings.Secure.KEY_ROTARY_KEY_EVENT_FILTER;
-import static android.provider.Settings.Secure.DEFAULT_INPUT_METHOD;
 import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.KeyEvent.ACTION_DOWN;
 import static android.view.KeyEvent.ACTION_UP;
@@ -67,7 +66,6 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -84,7 +82,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.SystemClock;
-import android.os.UserManager;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.IndentingPrintWriter;
@@ -100,9 +97,6 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
-import android.view.inputmethod.InputMethodInfo;
-import android.view.inputmethod.InputMethodManager;
-import android.view.inputmethod.InputMethodSubtype;
 import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
@@ -125,9 +119,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
@@ -181,9 +173,6 @@ public class RotaryService extends AccessibilityService implements
      */
     private static final int MSG_LONG_PRESS = 1;
 
-    private static final String SHARED_PREFS = "com.android.car.rotary.RotaryService";
-    private static final String TOUCH_INPUT_METHOD_PREFIX = "TOUCH_INPUT_METHOD_";
-
     /**
      * Key for activity metadata indicating that a nudge in the given direction ("up", "down",
      * "left", or "right") that would otherwise do nothing should trigger a global action, e.g.
@@ -205,9 +194,6 @@ public class RotaryService extends AccessibilityService implements
     private static final int INVALID_GLOBAL_ACTION = -1;
 
     private static final int NUM_DIRECTIONS = 4;
-
-    private static final String INPUT_METHOD_SUBTYPE_MODE_KEYBOARD = "keyboard";
-    private static final String INPUT_METHOD_SUBTYPE_MODE_ROTARY = "rotary";
 
     /**
      * Maps a direction to a string used to look up an off-screen nudge action in an activity's
@@ -257,6 +243,9 @@ public class RotaryService extends AccessibilityService implements
 
     @NonNull
     private Navigator mNavigator;
+
+    @Nullable
+    private ImeSwitcher mImeSwitcher;
 
     /** Input types to capture. */
     private final int[] mInputTypes = new int[]{
@@ -335,23 +324,8 @@ public class RotaryService extends AccessibilityService implements
      */
     private long mLastViewClickedTime;
 
-    /** Component name of rotary IME. Empty if none. */
-    @Nullable private String mRotaryInputMethod;
-
-    /** Component name of default IME used in touch mode. */
-    @Nullable private String mDefaultTouchInputMethod;
-
-    /** Component name of current IME used in touch mode. */
-    @Nullable private String mTouchInputMethod;
-
-    /** Observer to update {@link #mTouchInputMethod} when the user switches IMEs. */
-    private ContentObserver mInputMethodObserver;
-
     /** Observer to update service info when the developer toggles key event filtering. */
     private ContentObserver mKeyEventFilterObserver;
-
-    private SharedPreferences mPrefs;
-    private UserManager mUserManager;
 
     /**
      * The direction of the HUN. If there is no focused node, or the focused node is outside the
@@ -570,8 +544,6 @@ public class RotaryService extends AccessibilityService implements
 
     @Nullable private ContentResolver mContentResolver;
 
-    @Nullable private InputMethodManager mInputMethodManager;
-
     private final ExecutorService mExecutor = Executors.newSingleThreadExecutor();
 
     private final BroadcastReceiver mAppInstallUninstallReceiver = new BroadcastReceiver() {
@@ -626,38 +598,8 @@ public class RotaryService extends AccessibilityService implements
 
         mNavigator = new Navigator(displayWidth, displayHeight, hunLeft, hunRight, showHunOnBottom);
         mNavigator.initHostApp(getPackageManager());
-
-        mPrefs = createDeviceProtectedStorageContext().getSharedPreferences(SHARED_PREFS,
-                Context.MODE_PRIVATE);
-        mUserManager = getSystemService(UserManager.class);
-
         mInputManager = getSystemService(InputManager.class);
-        mInputMethodManager = getSystemService(InputMethodManager.class);
-        if (mInputMethodManager == null) {
-            throw new IllegalStateException("Failed to get InputMethodManager");
-        }
-
-        mRotaryInputMethod = getRotaryInputMethod(mInputMethodManager);
-        mDefaultTouchInputMethod = getDefaultTouchInputMethod(mInputMethodManager);
-        L.d("mRotaryInputMethod:" + mRotaryInputMethod + ", mDefaultTouchInputMethod:"
-                + mDefaultTouchInputMethod);
-        mTouchInputMethod = mPrefs.getString(TOUCH_INPUT_METHOD_PREFIX
-                + mUserManager.getUserName(), mDefaultTouchInputMethod);
-        // TODO(b/346437360): use a better way to initialize mTouchInputMethod.
-        if (mTouchInputMethod.isEmpty()
-                || !Utils.isInstalledIme(mTouchInputMethod, mInputMethodManager)) {
-            // Workaround for b/323013736.
-            L.e("mTouchInputMethod is empty or not installed!");
-            mTouchInputMethod = mDefaultTouchInputMethod;
-        }
-
-        if (mRotaryInputMethod != null && mRotaryInputMethod.equals(getCurrentIme())) {
-            // Switch from the rotary IME to the touch IME in case Android defaults to the rotary
-            // IME.
-            // TODO(b/169423887): Figure out how to configure the default IME through Android
-            // without needing to do this.
-            setCurrentIme(mTouchInputMethod);
-        }
+        mImeSwitcher = ImeSwitcher.getOptionalInstance(this, mContentResolver);
 
         mAfterFocusTimeoutMs = res.getInteger(R.integer.after_focus_timeout_ms);
 
@@ -690,91 +632,6 @@ public class RotaryService extends AccessibilityService implements
         filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         filter.addDataScheme("package");
         registerReceiver(mAppInstallUninstallReceiver, filter);
-    }
-
-    /**
-     * Ensure that the IME configuration passed as argument is also available in
-     * {@link InputMethodManager}.
-     *
-     * @throws IllegalStateException if the ime configuration passed as argument is not available
-     *                               in {@link InputMethodManager}
-     */
-    private void validateImeConfiguration(String imeConfiguration) {
-        if (!Utils.isInstalledIme(imeConfiguration, mInputMethodManager)) {
-            throw new IllegalStateException(String.format("%s is not installed (run "
-                            + "`adb shell ime list -a -s` to list all installed input methods)",
-                    imeConfiguration));
-        }
-    }
-
-    /**
-     * Similar to IMMS's default IME selection, this method selects an enabled IMEs as follows:
-     * First, it seeks a system non-auxiliary IME with system language subtype and "keyboard"
-     * layout. If unavailable, it defaults to the first system non-auxiliary IME.
-     * If that also isn't found, it selects the very first IME in the enabled list.
-     */
-    @NonNull
-    private static String getDefaultTouchInputMethod(InputMethodManager imm) {
-        List<InputMethodInfo> enabledImes = imm.getEnabledInputMethodList();
-        if (enabledImes == null || enabledImes.isEmpty()) {
-            throw new IllegalStateException(
-                    "No IME enabled! Run `adb shell ime list -s` to list installed input methods ");
-        }
-        // We'd prefer to fall back on a system IME, since that is safer.
-        int i = enabledImes.size();
-        int firstFoundSystemIme = -1;
-        Locale systemLocale = Resources.getSystem().getConfiguration().getLocales().get(0);
-        while (i > 0) {
-            i--;
-            InputMethodInfo imi = enabledImes.get(i);
-            if (imi.isAuxiliaryIme()) {
-                continue;
-            }
-            if (imi.isSystem()
-                    && containsSubtypeOf(imi, systemLocale, INPUT_METHOD_SUBTYPE_MODE_KEYBOARD)) {
-                L.v("Found default touch IME:" + imi);
-                return imi.getComponent().flattenToShortString();
-            }
-            if (firstFoundSystemIme < 0 && imi.isSystem()) {
-                firstFoundSystemIme = i;
-                L.v("Default to system non-auxiliary IME");
-            }
-        }
-        InputMethodInfo imi = enabledImes.get(Math.max(firstFoundSystemIme, 0));
-        return imi.getComponent().flattenToShortString();
-    }
-
-    private static boolean containsSubtypeOf(@NonNull InputMethodInfo imi, @NonNull Locale locale,
-            @NonNull String mode) {
-        for (int i = 0; i < imi.getSubtypeCount(); ++i) {
-            final InputMethodSubtype subtype = imi.getSubtypeAt(i);
-            if (!subtype.getMode().equals(mode)) {
-                continue;
-            }
-            // Ignore country and check language only.
-            String language = locale.getLanguage();
-            if (subtype.getLocaleObject().getLanguage().equals(language)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    @Nullable
-    private String getRotaryInputMethod(InputMethodManager imm) {
-        // getInputMethodList() is used rather than getEnabledInputMethodList() because the Rotary
-        // IME could be installed on the system but not actively enabled.
-        List<InputMethodInfo> installedImes = imm.getInputMethodList();
-        for (InputMethodInfo imi : installedImes) {
-            List<InputMethodSubtype> subtypes = imm.getEnabledInputMethodSubtypeList(imi,
-                    /* allowsImplicitlyEnabledSubtypes= */ true);
-            for (InputMethodSubtype subtype : subtypes) {
-                if (INPUT_METHOD_SUBTYPE_MODE_ROTARY.equals(subtype.getMode())) {
-                    return imi.getComponent().flattenToShortString();
-                }
-            }
-        }
-        return null;
     }
 
     /**
@@ -829,7 +686,9 @@ public class RotaryService extends AccessibilityService implements
         addTouchOverlay();
 
         // Register an observer to update mTouchInputMethod whenever the user switches IMEs.
-        registerInputMethodObserver();
+        if (mImeSwitcher != null) {
+            mImeSwitcher.registerInputMethodObserver();
+        }
 
         // Register an observer to update the service info when the developer changes the filter
         // setting.
@@ -846,8 +705,9 @@ public class RotaryService extends AccessibilityService implements
         L.v("onDestroy");
         mExecutor.shutdown();
         unregisterReceiver(mAppInstallUninstallReceiver);
-
-        unregisterInputMethodObserver();
+        if (mImeSwitcher != null) {
+            mImeSwitcher.unregisterInputMethodObserver();
+        }
         unregisterFilterObserver();
         removeTouchOverlay();
         if (mCarInputManager != null) {
@@ -857,9 +717,12 @@ public class RotaryService extends AccessibilityService implements
             mCar.disconnect();
         }
 
-        // Reset to touch IME if the current IME is rotary IME.
         mInRotaryMode = false;
-        updateIme();
+        // Reset to touch IME if the current IME is rotary IME.
+        // Note: onDestroy() might not be called, so this is just the best effort.
+        if (mImeSwitcher != null) {
+            mImeSwitcher.switchIme(mInRotaryMode);
+        }
 
         super.onDestroy();
     }
@@ -1077,52 +940,6 @@ public class RotaryService extends AccessibilityService implements
         L.d((filterKeyEvents ? "Enabling" : "Disabling") + " key event filtering");
         serviceInfo.flags = flags;
         setServiceInfo(serviceInfo);
-    }
-
-    /**
-     * Registers an observer to updates {@link #mTouchInputMethod} whenever the user switches IMEs.
-     */
-    private void registerInputMethodObserver() {
-        if (mInputMethodObserver != null) {
-            throw new IllegalStateException("Input method observer already registered");
-        }
-        mInputMethodObserver = new ContentObserver(new Handler(Looper.myLooper())) {
-            @Override
-            public void onChange(boolean selfChange) {
-                // Either the user switched input methods or we did. In the former case, update
-                // mTouchInputMethod and save it so we can switch back after switching to the rotary
-                // input method.
-                String inputMethod = getCurrentIme();
-                L.d("Current IME changed to " + inputMethod);
-                if (!TextUtils.isEmpty(inputMethod) && !inputMethod.equals(mRotaryInputMethod)) {
-                    mTouchInputMethod = inputMethod;
-                    String userName = mUserManager.getUserName();
-                    L.d("Save mTouchInputMethod(" + mTouchInputMethod + ") for user "
-                            + userName);
-                    mPrefs.edit()
-                            .putString(TOUCH_INPUT_METHOD_PREFIX + userName, mTouchInputMethod)
-                            .apply();
-                }
-            }
-        };
-        if (mContentResolver == null) {
-            return;
-        }
-        mContentResolver.registerContentObserver(
-                Settings.Secure.getUriFor(DEFAULT_INPUT_METHOD),
-                /* notifyForDescendants= */ false,
-                mInputMethodObserver);
-    }
-
-    /** Unregisters the observer registered by {@link #registerInputMethodObserver}. */
-    private void unregisterInputMethodObserver() {
-        if (mInputMethodObserver != null) {
-            if (mContentResolver == null) {
-                return;
-            }
-            mContentResolver.unregisterContentObserver(mInputMethodObserver);
-            mInputMethodObserver = null;
-        }
     }
 
     /**
@@ -2811,7 +2628,9 @@ public class RotaryService extends AccessibilityService implements
         if (!mInRotaryMode) {
             setEditNode(null);
         }
-        updateIme();
+        if (mImeSwitcher != null) {
+            mImeSwitcher.switchIme(inRotaryMode);
+        }
 
         // If we're controlling direct manipulation mode (i.e., the focused node supports rotate
         // directly), exit the mode when the user touches the screen.
@@ -2831,51 +2650,7 @@ public class RotaryService extends AccessibilityService implements
         }
     }
 
-    /** Switches to the rotary IME or the touch IME if needed. */
-    private void updateIme() {
-        String newIme;
-        if (mInRotaryMode) {
-            // We're entering Rotary mode, therefore we're setting the rotary IME as the
-            // default IME.
-            newIme = mRotaryInputMethod;
-        } else {
-            String oldIme = getCurrentIme();
-            if (Objects.equals(oldIme, mRotaryInputMethod)) {
-                // Since the previous IME was rotary IME and we're leaving rotary mode, then we
-                // switch back to the Android Auto default IME.
-                newIme = mTouchInputMethod;
-            } else {
-                // Since we're not entering rotary mode and the current keyboard is not the rotary
-                // IME, then there is no need to switch IMEs.
-                return;
-            }
-        }
 
-        if (!Utils.isInstalledIme(newIme, mInputMethodManager)) {
-            L.w("Rotary IME doesn't exist: " + newIme);
-            return;
-        }
-        setCurrentIme(newIme);
-    }
-
-    @Nullable
-    private String getCurrentIme() {
-        if (mContentResolver == null) {
-            return null;
-        }
-        return Settings.Secure.getString(mContentResolver, DEFAULT_INPUT_METHOD);
-    }
-
-    private void setCurrentIme(String newIme) {
-        if (mContentResolver == null) {
-            return;
-        }
-        String oldIme = getCurrentIme();
-        validateImeConfiguration(newIme);
-        boolean result =
-                Settings.Secure.putString(mContentResolver, DEFAULT_INPUT_METHOD, newIme);
-        L.successOrFailure("Switching IME from " + oldIme + " to " + newIme, result);
-    }
 
     /**
      * Performs {@link AccessibilityNodeInfo#ACTION_FOCUS} on a copy of the given {@code
@@ -3061,12 +2836,6 @@ public class RotaryService extends AccessibilityService implements
                 mFocusArea);
         DumpUtils.writeObject(dumpOutputStream, "lastTouchedNode",
                 RotaryProtos.RotaryService.LAST_TOUCHED_NODE, mLastTouchedNode);
-        dumpOutputStream.write("rotaryInputMethod", RotaryProtos.RotaryService.ROTARY_INPUT_METHOD,
-                mRotaryInputMethod);
-        dumpOutputStream.write("defaultTouchInputMethod",
-                RotaryProtos.RotaryService.DEFAULT_TOUCH_INPUT_METHOD, mDefaultTouchInputMethod);
-        dumpOutputStream.write("touchInputMethod", RotaryProtos.RotaryService.TOUCH_INPUT_METHOD,
-                mTouchInputMethod);
         DumpUtils.writeFocusDirection(dumpOutputStream, dumpAsProto, "hunNudgeDirection",
                 RotaryProtos.RotaryService.HUN_NUDGE_DIRECTION, mHunNudgeDirection);
         DumpUtils.writeFocusDirection(dumpOutputStream, dumpAsProto, "hunEscapeNudgeDirection",
@@ -3107,6 +2876,10 @@ public class RotaryService extends AccessibilityService implements
                 RotaryProtos.RotaryService.NAVIGATOR);
         mWindowCache.dump(dumpOutputStream, dumpAsProto, "windowCache",
                 RotaryProtos.RotaryService.WINDOW_CACHE);
+        if (mImeSwitcher != null) {
+            mImeSwitcher.dump(dumpOutputStream, "imeSwitcher",
+                    RotaryProtos.RotaryService.IME_SWITCHER);
+        }
         dumpOutputStream.flush();
     }
 }

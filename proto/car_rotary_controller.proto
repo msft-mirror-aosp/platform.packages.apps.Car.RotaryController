@@ -31,28 +31,26 @@ message RotaryService {
   optional int32 ignore_view_clicked_ms = 7;
   optional string ignore_view_clicked_node = 8;
   optional int64 last_view_clicked_time = 9;
-  optional string rotary_input_method = 10;
-  optional string default_touch_input_method = 11;
-  optional string touch_input_method = 12;
-  optional FocusRealDirection hun_nudge_direction = 13;
-  optional FocusRealDirection hun_escape_nudge_direction = 14;
-  repeated int32 off_screen_nudge_global_actions = 15;
-  repeated int32 off_screen_nudge_key_codes = 16;
-  repeated string off_screen_nudge_intents = 17;
-  optional int32 after_scroll_timeout_ms = 18;
-  optional AfterScrollAction after_scroll_action = 19;
-  optional int64 after_scroll_action_until = 20;
-  optional bool in_rotary_mode = 21;
-  optional bool in_direct_manipulation_mode = 22;
-  optional int64 last_rotate_event_time = 23;
-  optional int64 long_press_ms = 24;
-  optional bool long_press_triggered = 25;
-  optional ComponentName foreground_activity = 26;
-  optional int64 after_focus_timeout_ms = 27;
-  optional string pending_focused_node = 28;
-  optional int64 pending_focused_expiration_time = 29;
-  optional Navigator navigator = 30;
-  optional WindowCache window_cache = 31;
+  optional FocusRealDirection hun_nudge_direction = 10;
+  optional FocusRealDirection hun_escape_nudge_direction = 11;
+  repeated int32 off_screen_nudge_global_actions = 12;
+  repeated int32 off_screen_nudge_key_codes = 13;
+  repeated string off_screen_nudge_intents = 14;
+  optional int32 after_scroll_timeout_ms = 15;
+  optional AfterScrollAction after_scroll_action = 16;
+  optional int64 after_scroll_action_until = 17;
+  optional bool in_rotary_mode = 18;
+  optional bool in_direct_manipulation_mode = 19;
+  optional int64 last_rotate_event_time = 20;
+  optional int64 long_press_ms = 21;
+  optional bool long_press_triggered = 22;
+  optional ComponentName foreground_activity = 23;
+  optional int64 after_focus_timeout_ms = 24;
+  optional string pending_focused_node = 25;
+  optional int64 pending_focused_expiration_time = 26;
+  optional Navigator navigator = 27;
+  optional WindowCache window_cache = 28;
+  optional ImeSwitcher ime_switcher = 29;
 }
 
 message Navigator {
@@ -61,6 +59,12 @@ message Navigator {
   optional FocusRealDirection hun_nudge_direction = 3;
   optional Rect app_window_bounds = 4;
   optional SurfaceViewHelper surface_view_helper = 5;
+}
+
+message ImeSwitcher {
+  optional string rotary_input_method = 1;
+  optional string default_touch_input_method = 2;
+  optional string touch_input_method = 3;
 }
 
 message SurfaceViewHelper {
