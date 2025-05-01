@@ -1799,7 +1799,6 @@ public class RotaryService extends AccessibilityService implements
         AccessibilityNodeInfo nodeToFocus = Utils.isFocusArea(targetFocusArea)
                 // targetFocusArea represents a Composable with AccessibilityClassName being
                 // "com.android.car.ui.FocusArea".
-                // TODO(b/366081548): add a unit test.
                 ? mNavigator.findFirstFocusableDescendant(targetFocusArea)
                 // targetFocusArea is an implicit focus area, or there is an orphan view.
                 : mNavigator.findFirstOrphan(targetFocusArea);
@@ -1811,8 +1810,8 @@ public class RotaryService extends AccessibilityService implements
         }
         boolean success = performFocusAction(nodeToFocus);
         nodeToFocus.recycle();
-        L.successOrFailure("Nudging to the nearest implicit focus area " + targetFocusArea,
-                success);
+        L.successOrFailure("Nudging to the Compose FocusArea or the nearest implicit focus area "
+                        + targetFocusArea, success);
         targetFocusArea.recycle();
     }
 
