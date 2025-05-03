@@ -18,4 +18,5 @@
     android:accessibilityEventTypes="typeViewFocused|typeViewClicked|typeViewAccessibilityFocused|typeViewAccessibilityFocusCleared|typeViewScrolled|typeWindowStateChanged|typeWindowsChanged"
     android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
     android:canRequestFilterKeyEvents="true"
-    android:canRetrieveWindowContent="true"/>
+    android:canRetrieveWindowContent="true"
+    android:isAccessibilityTool="true"/>
