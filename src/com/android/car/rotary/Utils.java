@@ -292,6 +292,13 @@ final class Utils {
         return className != null && COMPOSE_VIEW_CLASS_NAME.contentEquals(className);
     }
 
+    /**
+     * Returns whether the given {@code node} represents a {@code ComposeView} or {@link WebView}.
+     */
+    static boolean isVirtualView(@NonNull AccessibilityNodeInfo node) {
+        return isWebView(node) || isComposeView(node);
+    }
+
     /** Returns whether the given {@code node} represents a {@link SurfaceView}. */
     static boolean isSurfaceView(@NonNull AccessibilityNodeInfo node) {
         CharSequence className = node.getClassName();
@@ -301,7 +308,7 @@ final class Utils {
     /**
      * Returns whether the given node represents a rotary container, as indicated by its content
      * description. This includes containers that can be scrolled using the rotary controller as
-     * well as other containers."
+     * well as other containers.
      */
     static boolean isRotaryContainer(@NonNull AccessibilityNodeInfo node) {
         CharSequence contentDescription = node.getContentDescription();
