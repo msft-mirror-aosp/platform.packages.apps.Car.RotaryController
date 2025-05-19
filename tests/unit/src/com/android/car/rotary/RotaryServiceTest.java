@@ -24,6 +24,8 @@ import static android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED;
 import static android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
 
+import static com.android.car.rotary.ComposeActivityKt.LEFT_FOCUS_AREA_CONTENT_DESCRIPTION;
+import static com.android.car.rotary.ComposeActivityKt.RIGHT_FOCUS_AREA_CONTENT_DESCRIPTION;
 import static com.android.car.ui.utils.DirectManipulationHelper.DIRECT_MANIPULATION;
 import static com.android.car.ui.utils.RotaryConstants.ACTION_RESTORE_DEFAULT_FOCUS;
 
@@ -90,6 +92,7 @@ public class RotaryServiceTest {
 
     private AccessibilityNodeInfo mWindowRoot;
     private ActivityTestRule<NavigatorTestActivity> mActivityRule;
+    private ActivityTestRule<ComposeActivity> mComposeActivityRule;
     private Intent mIntent;
     private NodeBuilder mNodeBuilder;
 
@@ -115,15 +118,10 @@ public class RotaryServiceTest {
         AccessibilityServiceInfo serviceInfo = sUiAutomation.getServiceInfo();
         serviceInfo.flags = sOriginalFlags;
         sUiAutomation.setServiceInfo(serviceInfo);
-
     }
 
     @Before
     public void setUp() {
-        mActivityRule = new ActivityTestRule<>(NavigatorTestActivity.class);
-        mIntent = new Intent();
-        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
-
         MockitoAnnotations.initMocks(this);
         mRotaryService.setNavigator(mNavigator);
         mRotaryService.setNodeCopier(MockNodeCopierProvider.get());
@@ -135,7 +133,12 @@ public class RotaryServiceTest {
 
     @After
     public void tearDown() {
-        mActivityRule.finishActivity();
+        if (mActivityRule != null) {
+            mActivityRule.finishActivity();
+        }
+        if (mComposeActivityRule != null) {
+            mComposeActivityRule.finishActivity();
+        }
         Utils.recycleNode(mWindowRoot);
         Utils.recycleNodes(mNodes);
     }
@@ -945,6 +948,55 @@ public class RotaryServiceTest {
         mRotaryService.nudgeTo(windows, View.FOCUS_UP);
         AccessibilityNodeInfo appButton1Node = createNode("app_button1");
         assertThat(mRotaryService.getFocusedNode()).isEqualTo(appButton1Node);
+    }
+
+    /**
+     * Tests {@link RotaryService#nudgeTo(List, int)} in the following layout:
+     * <pre>
+     *    ---------------------------------ComposeView-----------------------------------
+     *    -  =======Composable(FocusArea)======    ========Composable(FocusArea)======  -
+     *    -  =                                =    =                                 =  -
+     *    -  =  ...............               =    =  ...............                =  -
+     *    -  =  .             .               =    =  .             .                =  -
+     *    -  =  . Composable1 .               =    =  . Composable2 .                =  -
+     *    -  =  .             .               =    =  .             .                =  -
+     *    -  =  ...............               =    =  ...............                =  -
+     *    -  =                                =    =                                 =  -
+     *    -  ==================================    ===================================  -
+     *    -------------------------------------------------------------------------------
+     * </pre>
+     */
+    @Test
+    public void testNudgeTo_nudgeToComposables() {
+        initComposeActivity();
+
+        AccessibilityWindowInfo window = mWindowRoot.getWindow();
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(window);
+        when(mRotaryService.getWindows()).thenReturn(windows);
+
+        TreeTraverser treeTraverser = new TreeTraverser();
+        AccessibilityNodeInfo leftFocusArea = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> LEFT_FOCUS_AREA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        AccessibilityNodeInfo leftButton = leftFocusArea.getChild(0);
+        assertThat(leftButton).isNotNull();
+        AccessibilityNodeInfo rightFocusArea = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> RIGHT_FOCUS_AREA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        AccessibilityNodeInfo rightButton = rightFocusArea.getChild(0);
+        assertThat(rightButton).isNotNull();
+        assertThat(leftButton).isNotEqualTo(rightButton);
+
+        mRotaryService.setFocusedNode(leftButton);
+
+        // Nudge to the right.
+        mRotaryService.nudgeTo(windows, View.FOCUS_RIGHT);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(rightButton);
+
+        // Nudge back to the left.
+        mRotaryService.nudgeTo(windows, View.FOCUS_LEFT);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(leftButton);
+
+        window.recycle();
     }
 
     /**
@@ -2300,8 +2352,19 @@ public class RotaryServiceTest {
      * {@link AccessibilityNodeInfo}.
      */
     private void initActivity(@LayoutRes int layoutResId) {
+        mActivityRule = new ActivityTestRule<>(NavigatorTestActivity.class);
+        mIntent = new Intent();
+        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
         mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
         mActivityRule.launchActivity(mIntent);
+        PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
+    }
+
+    private void initComposeActivity() {
+        mComposeActivityRule = new ActivityTestRule<>(ComposeActivity.class);
+        mIntent = new Intent();
+        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+        mComposeActivityRule.launchActivity(mIntent);
         PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
     }
 

@@ -19,6 +19,8 @@ import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATIO
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM;
 
+import static com.android.car.rotary.ComposeActivityKt.LEFT_FOCUS_AREA_CONTENT_DESCRIPTION;
+import static com.android.car.rotary.ComposeActivityKt.RIGHT_FOCUS_AREA_CONTENT_DESCRIPTION;
 import static com.android.car.ui.utils.RotaryConstants.ROTARY_VERTICALLY_SCROLLABLE;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -66,6 +68,7 @@ public class NavigatorTest {
     private final List<AccessibilityNodeInfo> mNodes = new ArrayList<>();
 
     private ActivityTestRule<NavigatorTestActivity> mActivityRule;
+    private ActivityTestRule<ComposeActivity> mComposeActivityRule;
     private Intent mIntent;
     private Rect mDisplayBounds;
     private Rect mHunWindowBounds;
@@ -94,9 +97,6 @@ public class NavigatorTest {
 
     @Before
     public void setUp() {
-        mActivityRule = new ActivityTestRule<>(NavigatorTestActivity.class);
-        mIntent = new Intent();
-        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
         mDisplayBounds = new Rect(0, 0, 1080, 920);
         mHunWindowBounds = new Rect(50, 10, 950, 200);
         // The values of displayWidth and displayHeight affects testFindNudgeTargetFocusArea5
@@ -111,7 +111,12 @@ public class NavigatorTest {
 
     @After
     public void tearDown() {
-        mActivityRule.finishActivity();
+        if (mActivityRule != null) {
+            mActivityRule.finishActivity();
+        }
+        if (mComposeActivityRule != null) {
+            mComposeActivityRule.finishActivity();
+        }
         Utils.recycleNode(mWindowRoot);
         Utils.recycleNodes(mNodes);
     }
@@ -1983,12 +1988,73 @@ public class NavigatorTest {
     }
 
     /**
-     * Starts the test activity with the given layout and initializes the root
+     * Tests {@link Navigator#findNudgeTargetFocusArea} between Composable focus areas in the
+     * following layout:
+     * <pre>
+     *    ---------------------------------ComposeView-----------------------------------
+     *    -  =======Composable(FocusArea)======    ========Composable(FocusArea)======  -
+     *    -  =                                =    =                                 =  -
+     *    -  =  ...............               =    =  ...............                =  -
+     *    -  =  .             .               =    =  .             .                =  -
+     *    -  =  . Composable1 .               =    =  . Composable2 .                =  -
+     *    -  =  .             .               =    =  .             .                =  -
+     *    -  =  ...............               =    =  ...............                =  -
+     *    -  =                                =    =                                 =  -
+     *    -  ==================================    ===================================  -
+     *    -------------------------------------------------------------------------------
+     * </pre>
+     */
+    @Test
+    public void testFindNudgeTargetFocusArea_Composables() {
+        initComposeActivity();
+        // The only way to create a AccessibilityWindowInfo in the test is via mock.
+        AccessibilityWindowInfo mockWindow = new WindowBuilder()
+                .setRoot(mWindowRoot)
+                .setBoundsInScreen(mWindowRoot.getBoundsInScreen())
+                .build();
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(mockWindow);
+        TreeTraverser treeTraverser = new TreeTraverser();
+        AccessibilityNodeInfo leftFocusArea = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> LEFT_FOCUS_AREA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        assertThat(leftFocusArea).isNotNull();
+        AccessibilityNodeInfo leftButton = mNavigator.findFirstFocusableDescendant(leftFocusArea);
+        assertThat(leftButton).isNotNull();
+        AccessibilityNodeInfo rightFocusArea = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> RIGHT_FOCUS_AREA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        assertThat(leftButton).isNotNull();
+        // Only an AccessibilityService with the permission to retrieve the active window content
+        // can create an AccessibilityWindowInfo. So the AccessibilityWindowInfo and the associated
+        // AccessibilityNodeInfos have to be mocked.
+        AccessibilityNodeInfo mockLeftButton = mNodeBuilder
+                .setWindow(mockWindow)
+                .setBoundsInScreen(leftButton.getBoundsInScreen())
+                .setParent(leftFocusArea)
+                .build();
+        // Nudge right.
+        AccessibilityNodeInfo target = mNavigator.findNudgeTargetFocusArea(
+                windows, mockLeftButton, leftFocusArea, View.FOCUS_RIGHT);
+        assertThat(target).isEqualTo(rightFocusArea);
+    }
+
+    /**
+     * Starts the NavigatorTestActivity with the given layout and initializes the root
      * {@link AccessibilityNodeInfo}.
      */
     private void initActivity(@LayoutRes int layoutResId) {
+        mActivityRule = new ActivityTestRule<>(NavigatorTestActivity.class);
+        mIntent = new Intent();
+        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
         mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
         mActivityRule.launchActivity(mIntent);
+        PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
+    }
+
+    private void initComposeActivity() {
+        mComposeActivityRule = new ActivityTestRule<>(ComposeActivity.class);
+        mIntent = new Intent();
+        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+        mComposeActivityRule.launchActivity(mIntent);
         PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
     }
 
