@@ -43,6 +43,7 @@ import static android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK
 import static android.view.accessibility.AccessibilityNodeInfo.ACTION_SELECT;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD;
 import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD;
+import static android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 
@@ -2383,6 +2384,19 @@ public class RotaryService extends AccessibilityService implements
             // it properly when the user uses the controller next time.
             if (mNavigator.isInVirtualNodeHierarchy(mFocusedNode)) {
                 L.v("mFocusedNode is in a WebView or ComposeView: " + mFocusedNode);
+                if (Utils.isComposeView(mFocusedNode.getParent())) {
+                    // Workaround for b/418077193:
+                    // Normally, when focus transitions from a classic View to a Composable, focus
+                    // events occur for both the AndroidComposeView (the Compose host) and then the
+                    // specific Composable that gained focus.
+                    // However, the event for the Composable itself can be intermittently missing.
+                    // This leads to an incorrect mFocusedNode.
+                    // To mitigate this, we proactively search for and update to the truly focused
+                    // Composable when mFocusedNode is AndroidComposeView.
+                    mFocusedNode = mFocusedNode.findFocus(FOCUS_INPUT);
+                    L.i("Adjust mFocusedNode to the really focused Composable: " + mFocusedNode);
+                }
+
                 return false;
             }
         }
