@@ -168,10 +168,26 @@ class Navigator {
         AccessibilityNodeInfo candidate = copyNode(sourceNode);
         AccessibilityNodeInfo target = null;
         while (advancedCount < rotationCount) {
+
+            // When the WebView is focused and not scrollable, it means it has been scrolled to
+            // its edge (b/416347411). In that case, controller rotation should move focus to the
+            // next/previous focusable View.
+            boolean focusShouldLeaveWebView = false;
+            if (Utils.isWebView(sourceNode)) {
+                AccessibilityNodeInfo.AccessibilityAction scrollAction =
+                        direction == View.FOCUS_FORWARD
+                                ? ACTION_SCROLL_FORWARD
+                                : ACTION_SCROLL_BACKWARD;
+                if (!sourceNode.getActionList().contains(scrollAction)) {
+                    focusShouldLeaveWebView = true;
+                    L.d("Focus should leave WebView and move to an adjacent View");
+                }
+            }
+
             AccessibilityNodeInfo nextCandidate = null;
             // Virtual View hierarchies like WebViews and ComposeViews do not support focusSearch().
             AccessibilityNodeInfo virtualViewAncestor = findVirtualViewAncestor(candidate);
-            if (virtualViewAncestor != null) {
+            if (virtualViewAncestor != null && !focusShouldLeaveWebView) {
                 // Current focus is a virtual node.
                 nextCandidate =
                     findNextFocusableInVirtualRoot(virtualViewAncestor, candidate, direction);
@@ -180,7 +196,6 @@ class Navigator {
                     // virtual node, while Utils.isVirtualView(nextCandidate) happens when handling
                     // counter-clock wise rotation from the first virtual node.
                     // In either case, we need to move focus out of the virtual view hierarchy.
-                    // TODO(b/416347411): this has been broken for WebView.
                     if (Utils.isComposeView(virtualViewAncestor)
                             && !virtualViewAncestor.isFocusable()) {
                         // If the ComposeView is not focusable, ComposeView#focusSearch() will not

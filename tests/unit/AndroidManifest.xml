@@ -33,6 +33,7 @@
         <activity android:name="com.android.car.rotary.ViewComposeActivity" />
         <activity android:name="com.android.car.rotary.NavigatorTestActivity" />
         <activity android:name="com.android.car.rotary.TreeTraverserTestActivity" />
+        <activity android:name="com.android.car.rotary.WebViewTestActivity" />
     </application>
 
     <instrumentation android:name="androidx.test.runner.AndroidJUnitRunner"

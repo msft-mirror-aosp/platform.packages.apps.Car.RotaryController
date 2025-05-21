@@ -764,6 +764,43 @@ public class NavigatorTest {
     }
 
     /**
+     * Tests {@link Navigator#findRotateTarget} in the following node tree:
+     * <pre>
+     *                  FocusArea
+     *               /      |        \
+     *            /         |          \
+     *    button1        WebView          button2
+     *          (focused, not scrollable)
+     *                    |
+     *                    |
+     *                  links
+     * </pre>
+     */
+    @Test
+    public void testFindRotateTarget_WebView() throws InterruptedException {
+        initActivity(WebViewTestActivity.class, INVALID_RESOURCE_ID);
+
+        Activity activity = mActivityRule.getActivity();
+        View webView = activity.findViewById(R.id.web_view);
+        CountDownLatch latch = new CountDownLatch(1);
+        webView.post(() -> {
+            webView.requestFocus();
+            webView.post(() -> latch.countDown());
+        });
+        latch.await(WAIT_TIME_MS, TimeUnit.MILLISECONDS);
+        assertThat(webView.isFocused()).isTrue();
+
+        AccessibilityNodeInfo webViewNode = createNode("web_view");
+        assertThat(webViewNode).isNotNull();
+        AccessibilityNodeInfo bottomButton = createNode("bottom_button");
+
+        FindRotateTargetResult target =
+                mNavigator.findRotateTarget(webViewNode, View.FOCUS_FORWARD, 1);
+        assertThat(target.node).isEqualTo(bottomButton);
+        assertThat(target.advancedCount).isEqualTo(1);
+    }
+
+    /**
      * Tests {@link Navigator#findScrollableContainer} in the following node tree:
      * <pre>
      *                root
