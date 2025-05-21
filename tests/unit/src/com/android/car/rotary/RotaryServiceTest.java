@@ -26,6 +26,8 @@ import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATIO
 
 import static com.android.car.rotary.ComposeActivityKt.LEFT_FOCUS_AREA_CONTENT_DESCRIPTION;
 import static com.android.car.rotary.ComposeActivityKt.RIGHT_FOCUS_AREA_CONTENT_DESCRIPTION;
+import static com.android.car.rotary.ViewComposeActivityKt.BUTTONA_CONTENT_DESCRIPTION;
+import static com.android.car.rotary.ViewComposeActivityKt.BUTTONB_CONTENT_DESCRIPTION;
 import static com.android.car.ui.utils.DirectManipulationHelper.DIRECT_MANIPULATION;
 import static com.android.car.ui.utils.RotaryConstants.ACTION_RESTORE_DEFAULT_FOCUS;
 
@@ -76,14 +78,19 @@ import org.mockito.Spy;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 @RunWith(AndroidJUnit4.class)
 public class RotaryServiceTest {
+
+    private static final long WAIT_TIME_MS = 3000;
 
     private final static String HOST_APP_PACKAGE_NAME = "host.app.package.name";
     private final static String CLIENT_APP_PACKAGE_NAME = "client.app.package.name";
     private static final int ROTATION_ACCELERATION_2X_MS = 50;
     private static final int ROTATION_ACCELERATION_3X_MS = 25;
+    private static final int INVALID_RESOURCE_ID = -1;
 
     private static UiAutomation sUiAutomation;
     private static int sOriginalFlags;
@@ -91,8 +98,7 @@ public class RotaryServiceTest {
     private final List<AccessibilityNodeInfo> mNodes = new ArrayList<>();
 
     private AccessibilityNodeInfo mWindowRoot;
-    private ActivityTestRule<NavigatorTestActivity> mActivityRule;
-    private ActivityTestRule<ComposeActivity> mComposeActivityRule;
+    private ActivityTestRule<? extends Activity> mActivityRule;
     private Intent mIntent;
     private NodeBuilder mNodeBuilder;
 
@@ -135,9 +141,6 @@ public class RotaryServiceTest {
     public void tearDown() {
         if (mActivityRule != null) {
             mActivityRule.finishActivity();
-        }
-        if (mComposeActivityRule != null) {
-            mComposeActivityRule.finishActivity();
         }
         Utils.recycleNode(mWindowRoot);
         Utils.recycleNodes(mNodes);
@@ -614,6 +617,218 @@ public class RotaryServiceTest {
     }
 
     /**
+     * Tests {@link RotaryService#onRotaryEvents} in the following node tree:
+     * <pre>
+     *                  FocusArea
+     *               /    |     \
+     *            /       |       \
+     *     button1   ComposeView   button2
+     *               (focusable)
+     *                   / \
+     *                 /    \
+     *           buttonA   buttonB
+     * </pre>
+     */
+    @Test
+    public void testOnRotaryEvents_ViewAndCompose1() {
+        initActivity(ViewComposeActivity.class, INVALID_RESOURCE_ID);
+        Activity activity = mActivityRule.getActivity();
+        View composeView = activity.findViewById(R.id.compose_view);
+        assertThat(composeView.isFocusable()).isTrue();
+
+        AccessibilityWindowInfo window = new WindowBuilder()
+                .setRoot(mWindowRoot)
+                .setBoundsInScreen(mWindowRoot.getBoundsInScreen())
+                .build();
+        List<AccessibilityWindowInfo> windows = Collections.singletonList(window);
+        when(mRotaryService.getWindows()).thenReturn(windows);
+
+        AccessibilityNodeInfo button1 = createNode("button1");
+        assertThat(button1.isFocused()).isTrue();
+        mRotaryService.setFocusedNode(button1);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button1);
+
+        AccessibilityNodeInfo button2 = createNode("button2");
+        TreeTraverser treeTraverser = new TreeTraverser();
+        AccessibilityNodeInfo buttonA = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> BUTTONA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        if (!buttonA.isFocusable()) {
+            // The button node with content description is not focusable while its parent is
+            // focusable.
+            buttonA = buttonA.getParent();
+        }
+        AccessibilityNodeInfo buttonB = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> BUTTONB_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        if (!buttonB.isFocusable()) {
+            buttonB = buttonB.getParent();
+        }
+
+        // Rotate clockwise 4 times (button1 -> buttonA -> ButtonB -> Button2 -> Button2).
+        int inputType = CarInputManager.INPUT_TYPE_ROTARY_NAVIGATION;
+        int eventTime = ROTATION_ACCELERATION_2X_MS + 1;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(buttonA);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(buttonB);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button2);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        // It has reached to the boundary.
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button2);
+
+        // Rotate counter-clockwise 4 times (button2 -> buttonB -> ButtonA -> Button1 -> Button1).
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(buttonB);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(buttonA);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button1);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        // It has reached to the boundary.
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button1);
+    }
+
+    /**
+     * Tests {@link RotaryService#onRotaryEvents} in the following node tree:
+     * <pre>
+     *                  FocusArea
+     *               /    |     \
+     *            /       |       \
+     *     button1   ComposeView   button2
+     *             (not focusable)
+     *                   / \
+     *                 /    \
+     *           buttonA   buttonB
+     * </pre>
+     */
+    @Test
+    public void testOnRotaryEvents_ViewAndCompose2() throws InterruptedException {
+        initActivity(ViewComposeActivity.class, INVALID_RESOURCE_ID);
+
+        // Set ComposeView non-focusable.
+        Activity activity = mActivityRule.getActivity();
+        View composeView = activity.findViewById(R.id.compose_view);
+        CountDownLatch latch = new CountDownLatch(1);
+        composeView.post(() -> {
+            composeView.setFocusable(false);
+            composeView.post(() -> latch.countDown());
+        });
+        latch.await(WAIT_TIME_MS, TimeUnit.MILLISECONDS);
+        assertThat(composeView.isFocusable()).isFalse();
+
+        AccessibilityWindowInfo window = new WindowBuilder()
+                .setRoot(mWindowRoot)
+                .setBoundsInScreen(mWindowRoot.getBoundsInScreen())
+                .build();
+        List<AccessibilityWindowInfo> windows = Collections.singletonList(window);
+        when(mRotaryService.getWindows()).thenReturn(windows);
+
+        AccessibilityNodeInfo button1 = createNode("button1");
+        assertThat(button1.isFocused()).isTrue();
+        mRotaryService.setFocusedNode(button1);
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button1);
+
+        AccessibilityNodeInfo button2 = createNode("button2");
+        TreeTraverser treeTraverser = new TreeTraverser();
+        AccessibilityNodeInfo buttonA = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> BUTTONA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        if (!buttonA.isFocusable()) {
+            // The button node with content description is not focusable while its parent is
+            // focusable.
+            buttonA = buttonA.getParent();
+        }
+        AccessibilityNodeInfo buttonB = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> BUTTONB_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        if (!buttonB.isFocusable()) {
+            buttonB = buttonB.getParent();
+        }
+
+        // Rotate clockwise 4 times (button1 -> buttonA -> ButtonB -> Button2 -> Button2).
+        int inputType = CarInputManager.INPUT_TYPE_ROTARY_NAVIGATION;
+        int eventTime = ROTATION_ACCELERATION_2X_MS + 1;
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(buttonA);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(buttonB);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button2);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, true, new long[]{eventTime})));
+        // It has reached to the boundary.
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button2);
+
+        // Rotate counter-clockwise 4 times (button2 -> buttonB -> ButtonA -> Button1 -> Button1).
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(buttonB);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(buttonA);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button1);
+
+        eventTime += ROTATION_ACCELERATION_2X_MS + 1;
+        mRotaryService.onRotaryEvents(validDisplayId,
+                Collections.singletonList(
+                        new RotaryEvent(inputType, false, new long[]{eventTime})));
+        // It has reached to the boundary.
+        assertThat(mRotaryService.getFocusedNode()).isEqualTo(button1);
+    }
+
+    /**
      * Tests {@link RotaryService#nudgeTo(List, int)} in the following view tree:
      * <pre>
      *      The HUN window:
@@ -968,7 +1183,7 @@ public class RotaryServiceTest {
      */
     @Test
     public void testNudgeTo_nudgeToComposables() {
-        initComposeActivity();
+        initActivity(ComposeActivity.class, INVALID_RESOURCE_ID);
 
         AccessibilityWindowInfo window = mWindowRoot.getWindow();
         List<AccessibilityWindowInfo> windows = new ArrayList<>();
@@ -2348,23 +2563,25 @@ public class RotaryServiceTest {
     }
 
     /**
-     * Starts the test activity with the given layout and initializes the root
+     * Starts the NavigatorTestActivity with the given layout and initializes the root
      * {@link AccessibilityNodeInfo}.
      */
     private void initActivity(@LayoutRes int layoutResId) {
-        mActivityRule = new ActivityTestRule<>(NavigatorTestActivity.class);
-        mIntent = new Intent();
-        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
-        mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
-        mActivityRule.launchActivity(mIntent);
-        PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
+        initActivity(NavigatorTestActivity.class, layoutResId);
     }
 
-    private void initComposeActivity() {
-        mComposeActivityRule = new ActivityTestRule<>(ComposeActivity.class);
+    /**
+     * Starts the given Activity with the given layout and initializes the root
+     * {@link AccessibilityNodeInfo}.
+     */
+    private void initActivity(Class<? extends Activity> activityClass, @LayoutRes int layoutResId) {
+        mActivityRule = new ActivityTestRule<>(activityClass);
         mIntent = new Intent();
         mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
-        mComposeActivityRule.launchActivity(mIntent);
+        if (layoutResId != INVALID_RESOURCE_ID) {
+            mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
+        }
+        mActivityRule.launchActivity(mIntent);
         PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
     }
 
