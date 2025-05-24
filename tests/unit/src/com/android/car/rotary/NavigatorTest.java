@@ -19,6 +19,10 @@ import static android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATIO
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
 import static android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM;
 
+import static com.android.car.rotary.ComposeActivityKt.LEFT_FOCUS_AREA_CONTENT_DESCRIPTION;
+import static com.android.car.rotary.ComposeActivityKt.RIGHT_FOCUS_AREA_CONTENT_DESCRIPTION;
+import static com.android.car.rotary.ViewComposeActivityKt.BUTTONA_CONTENT_DESCRIPTION;
+import static com.android.car.rotary.ViewComposeActivityKt.BUTTONB_CONTENT_DESCRIPTION;
 import static com.android.car.ui.utils.RotaryConstants.ROTARY_VERTICALLY_SCROLLABLE;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -53,19 +57,22 @@ import org.junit.runner.RunWith;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 @RunWith(AndroidJUnit4.class)
 public class NavigatorTest {
 
+    private static final long WAIT_TIME_MS = 3000;
     private static final String HOST_APP_PACKAGE_NAME = "host.app.package.name";
     private static final String CLIENT_APP_PACKAGE_NAME = "client.app.package.name";
+    private static final int INVALID_RESOURCE_ID = -1;
 
     private static UiAutomation sUiAutomation;
     private static int sOriginalFlags;
 
     private final List<AccessibilityNodeInfo> mNodes = new ArrayList<>();
-
-    private ActivityTestRule<NavigatorTestActivity> mActivityRule;
+    private ActivityTestRule<? extends Activity> mActivityRule;
     private Intent mIntent;
     private Rect mDisplayBounds;
     private Rect mHunWindowBounds;
@@ -94,9 +101,6 @@ public class NavigatorTest {
 
     @Before
     public void setUp() {
-        mActivityRule = new ActivityTestRule<>(NavigatorTestActivity.class);
-        mIntent = new Intent();
-        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
         mDisplayBounds = new Rect(0, 0, 1080, 920);
         mHunWindowBounds = new Rect(50, 10, 950, 200);
         // The values of displayWidth and displayHeight affects testFindNudgeTargetFocusArea5
@@ -111,7 +115,9 @@ public class NavigatorTest {
 
     @After
     public void tearDown() {
-        mActivityRule.finishActivity();
+        if (mActivityRule != null) {
+            mActivityRule.finishActivity();
+        }
         Utils.recycleNode(mWindowRoot);
         Utils.recycleNodes(mNodes);
     }
@@ -595,6 +601,203 @@ public class NavigatorTest {
         assertThat(target.node).isEqualTo(text2);
         assertThat(target.advancedCount).isEqualTo(1);
         Utils.recycleNode(target.node);
+    }
+
+    /**
+     * Tests {@link Navigator#findRotateTarget} in the following node tree:
+     * <pre>
+     *                  FocusArea
+     *               /    |     \
+     *            /       |       \
+     *     button1   ComposeView   button2
+     *               (focusable)
+     *                   / \
+     *                 /    \
+     *           buttonA   buttonB
+     * </pre>
+     */
+    @Test
+    public void testFindRotateTarget_ViewAndCompose1() throws InterruptedException {
+        initActivity(ViewComposeActivity.class, INVALID_RESOURCE_ID);
+        Activity activity = mActivityRule.getActivity();
+        View composeView = activity.findViewById(R.id.compose_view);
+        assertThat(composeView.isFocusable()).isTrue();
+
+        AccessibilityNodeInfo button1 = createNode("button1");
+        AccessibilityNodeInfo button2 = createNode("button2");
+
+        TreeTraverser treeTraverser = new TreeTraverser();
+        AccessibilityNodeInfo buttonA = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> BUTTONA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        if (!buttonA.isFocusable()) {
+            // The button node with content description is not focusable while its parent is
+            // focusable.
+            buttonA = buttonA.getParent();
+        }
+        AccessibilityNodeInfo buttonB = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> BUTTONB_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        if (!buttonB.isFocusable()) {
+            buttonB = buttonB.getParent();
+        }
+
+        // Rotate once, the focus should move from button1 to buttonA.
+        FindRotateTargetResult target = mNavigator.findRotateTarget(button1, View.FOCUS_FORWARD, 1);
+        assertThat(target.node).isEqualTo(buttonA);
+        assertThat(target.advancedCount).isEqualTo(1);
+
+        // Rotate twice, the focus should move from button1 to buttonB.
+        target = mNavigator.findRotateTarget(button1, View.FOCUS_FORWARD, 2);
+        assertThat(target.node).isEqualTo(buttonB);
+        assertThat(target.advancedCount).isEqualTo(2);
+
+        // Rotate three times, the focus should move from button1 to button2.
+        target = mNavigator.findRotateTarget(button1, View.FOCUS_FORWARD, 3);
+        assertThat(target.node).isEqualTo(button2);
+        assertThat(target.advancedCount).isEqualTo(3);
+
+        // Rotate forward four times, the focus should move from button1 to button2 (it has reached
+        // to the boundary).
+        target = mNavigator.findRotateTarget(button1, View.FOCUS_FORWARD, 4);
+        assertThat(target.node).isEqualTo(button2);
+        assertThat(target.advancedCount).isEqualTo(3);
+
+        // Rotate back 1, 2, 3, 4 times.
+        target = mNavigator.findRotateTarget(button2, View.FOCUS_BACKWARD, 1);
+        assertThat(target.node).isEqualTo(buttonB);
+        assertThat(target.advancedCount).isEqualTo(1);
+
+        target = mNavigator.findRotateTarget(button2, View.FOCUS_BACKWARD, 2);
+        assertThat(target.node).isEqualTo(buttonA);
+        assertThat(target.advancedCount).isEqualTo(2);
+
+        target = mNavigator.findRotateTarget(button2, View.FOCUS_BACKWARD, 3);
+        assertThat(target.node).isEqualTo(button1);
+        assertThat(target.advancedCount).isEqualTo(3);
+
+        target = mNavigator.findRotateTarget(button2, View.FOCUS_BACKWARD, 4);
+        assertThat(target.node).isEqualTo(button1);
+        assertThat(target.advancedCount).isEqualTo(3);
+    }
+
+    /**
+     * Tests {@link Navigator#findRotateTarget} in the following node tree:
+     * <pre>
+     *                  FocusArea
+     *               /    |     \
+     *            /       |       \
+     *     button1   ComposeView   button2
+     *             (not focusable)
+     *                   / \
+     *                 /    \
+     *           buttonA   buttonB
+     * </pre>
+     */
+    @Test
+    public void testFindRotateTarget_ViewAndCompose2() throws InterruptedException {
+        initActivity(ViewComposeActivity.class, INVALID_RESOURCE_ID);
+
+        // Set ComposeView non-focusable.
+        Activity activity = mActivityRule.getActivity();
+        View composeView = activity.findViewById(R.id.compose_view);
+        CountDownLatch latch = new CountDownLatch(1);
+        composeView.post(() -> {
+            composeView.setFocusable(false);
+            composeView.post(() -> latch.countDown());
+        });
+        latch.await(WAIT_TIME_MS, TimeUnit.MILLISECONDS);
+        assertThat(composeView.isFocusable()).isFalse();
+
+        AccessibilityNodeInfo button1 = createNode("button1");
+        AccessibilityNodeInfo button2 = createNode("button2");
+
+        TreeTraverser treeTraverser = new TreeTraverser();
+        AccessibilityNodeInfo buttonA = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> BUTTONA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        if (!buttonA.isFocusable()) {
+            // The button node with content description is not focusable while its parent is
+            // focusable.
+            buttonA = buttonA.getParent();
+        }
+        AccessibilityNodeInfo buttonB = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> BUTTONB_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        if (!buttonB.isFocusable()) {
+            buttonB = buttonB.getParent();
+        }
+
+        // Rotate once, the focus should move from button1 to buttonA.
+        FindRotateTargetResult target = mNavigator.findRotateTarget(button1, View.FOCUS_FORWARD, 1);
+        assertThat(target.node).isEqualTo(buttonA);
+        assertThat(target.advancedCount).isEqualTo(1);
+
+        // Rotate twice, the focus should move from button1 to buttonB.
+        target = mNavigator.findRotateTarget(button1, View.FOCUS_FORWARD, 2);
+        assertThat(target.node).isEqualTo(buttonB);
+        assertThat(target.advancedCount).isEqualTo(2);
+
+        // Rotate three times, the focus should move from button1 to button2.
+        target = mNavigator.findRotateTarget(button1, View.FOCUS_FORWARD, 3);
+        assertThat(target.node).isEqualTo(button2);
+        assertThat(target.advancedCount).isEqualTo(3);
+
+        // Rotate forward four times, the focus should move from button1 to button2 (it has reached
+        // to the boundary).
+        target = mNavigator.findRotateTarget(button1, View.FOCUS_FORWARD, 4);
+        assertThat(target.node).isEqualTo(button2);
+        assertThat(target.advancedCount).isEqualTo(3);
+
+        // Rotate back 1, 2, 3, 4 times.
+        target = mNavigator.findRotateTarget(button2, View.FOCUS_BACKWARD, 1);
+        assertThat(target.node).isEqualTo(buttonB);
+        assertThat(target.advancedCount).isEqualTo(1);
+
+        target = mNavigator.findRotateTarget(button2, View.FOCUS_BACKWARD, 2);
+        assertThat(target.node).isEqualTo(buttonA);
+        assertThat(target.advancedCount).isEqualTo(2);
+
+        target = mNavigator.findRotateTarget(button2, View.FOCUS_BACKWARD, 3);
+        assertThat(target.node).isEqualTo(button1);
+        assertThat(target.advancedCount).isEqualTo(3);
+
+        target = mNavigator.findRotateTarget(button2, View.FOCUS_BACKWARD, 4);
+        assertThat(target.node).isEqualTo(button1);
+        assertThat(target.advancedCount).isEqualTo(3);
+    }
+
+    /**
+     * Tests {@link Navigator#findRotateTarget} in the following node tree:
+     * <pre>
+     *                  FocusArea
+     *               /      |        \
+     *            /         |          \
+     *    button1        WebView          button2
+     *          (focused, not scrollable)
+     *                    |
+     *                    |
+     *                  links
+     * </pre>
+     */
+    @Test
+    public void testFindRotateTarget_WebView() throws InterruptedException {
+        initActivity(WebViewTestActivity.class, INVALID_RESOURCE_ID);
+
+        Activity activity = mActivityRule.getActivity();
+        View webView = activity.findViewById(R.id.web_view);
+        CountDownLatch latch = new CountDownLatch(1);
+        webView.post(() -> {
+            webView.requestFocus();
+            webView.post(() -> latch.countDown());
+        });
+        latch.await(WAIT_TIME_MS, TimeUnit.MILLISECONDS);
+        assertThat(webView.isFocused()).isTrue();
+
+        AccessibilityNodeInfo webViewNode = createNode("web_view");
+        assertThat(webViewNode).isNotNull();
+        AccessibilityNodeInfo bottomButton = createNode("bottom_button");
+
+        FindRotateTargetResult target =
+                mNavigator.findRotateTarget(webViewNode, View.FOCUS_FORWARD, 1);
+        assertThat(target.node).isEqualTo(bottomButton);
+        assertThat(target.advancedCount).isEqualTo(1);
     }
 
     /**
@@ -1983,11 +2186,74 @@ public class NavigatorTest {
     }
 
     /**
-     * Starts the test activity with the given layout and initializes the root
+     * Tests {@link Navigator#findNudgeTargetFocusArea} between Composable focus areas in the
+     * following layout:
+     * <pre>
+     *    ---------------------------------ComposeView-----------------------------------
+     *    -  =======Composable(FocusArea)======    ========Composable(FocusArea)======  -
+     *    -  =                                =    =                                 =  -
+     *    -  =  ...............               =    =  ...............                =  -
+     *    -  =  .             .               =    =  .             .                =  -
+     *    -  =  . Composable1 .               =    =  . Composable2 .                =  -
+     *    -  =  .             .               =    =  .             .                =  -
+     *    -  =  ...............               =    =  ...............                =  -
+     *    -  =                                =    =                                 =  -
+     *    -  ==================================    ===================================  -
+     *    -------------------------------------------------------------------------------
+     * </pre>
+     */
+    @Test
+    public void testFindNudgeTargetFocusArea_Composables() {
+        initActivity(ComposeActivity.class, INVALID_RESOURCE_ID);
+        // The only way to create a AccessibilityWindowInfo in the test is via mock.
+        AccessibilityWindowInfo mockWindow = new WindowBuilder()
+                .setRoot(mWindowRoot)
+                .setBoundsInScreen(mWindowRoot.getBoundsInScreen())
+                .build();
+        List<AccessibilityWindowInfo> windows = new ArrayList<>();
+        windows.add(mockWindow);
+        TreeTraverser treeTraverser = new TreeTraverser();
+        AccessibilityNodeInfo leftFocusArea = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> LEFT_FOCUS_AREA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        assertThat(leftFocusArea).isNotNull();
+        AccessibilityNodeInfo leftButton = mNavigator.findFirstFocusableDescendant(leftFocusArea);
+        assertThat(leftButton).isNotNull();
+        AccessibilityNodeInfo rightFocusArea = treeTraverser.depthFirstSearch(mWindowRoot,
+                node -> RIGHT_FOCUS_AREA_CONTENT_DESCRIPTION.equals(node.getContentDescription()));
+        assertThat(leftButton).isNotNull();
+        // Only an AccessibilityService with the permission to retrieve the active window content
+        // can create an AccessibilityWindowInfo. So the AccessibilityWindowInfo and the associated
+        // AccessibilityNodeInfos have to be mocked.
+        AccessibilityNodeInfo mockLeftButton = mNodeBuilder
+                .setWindow(mockWindow)
+                .setBoundsInScreen(leftButton.getBoundsInScreen())
+                .setParent(leftFocusArea)
+                .build();
+        // Nudge right.
+        AccessibilityNodeInfo target = mNavigator.findNudgeTargetFocusArea(
+                windows, mockLeftButton, leftFocusArea, View.FOCUS_RIGHT);
+        assertThat(target).isEqualTo(rightFocusArea);
+    }
+
+    /**
+     * Starts the NavigatorTestActivity with the given layout and initializes the root
      * {@link AccessibilityNodeInfo}.
      */
     private void initActivity(@LayoutRes int layoutResId) {
-        mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
+        initActivity(NavigatorTestActivity.class, layoutResId);
+    }
+
+    /**
+     * Starts the given Activity with the given layout and initializes the root
+     * {@link AccessibilityNodeInfo}.
+     */
+    private void initActivity(Class<? extends Activity> activityClass, @LayoutRes int layoutResId) {
+        mActivityRule = new ActivityTestRule<>(activityClass);
+        mIntent = new Intent();
+        mIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (layoutResId != INVALID_RESOURCE_ID) {
+            mIntent.putExtra(NavigatorTestActivity.KEY_LAYOUT_ID, layoutResId);
+        }
         mActivityRule.launchActivity(mIntent);
         PollingCheck.waitFor(() -> (mWindowRoot = sUiAutomation.getRootInActiveWindow()) != null);
     }

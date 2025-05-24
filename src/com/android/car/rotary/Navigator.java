@@ -142,7 +142,7 @@ class Navigator {
     }
 
     /**
-     * Returns the target focusable for a rotate. The caller is responsible for recycling the node
+     * Returns the target focusable for a rotation. The caller is responsible for recycling the node
      * in the result.
      *
      * <p>Limits navigation to focusable views within a scrollable container's viewport, if any.
@@ -168,18 +168,67 @@ class Navigator {
         AccessibilityNodeInfo candidate = copyNode(sourceNode);
         AccessibilityNodeInfo target = null;
         while (advancedCount < rotationCount) {
+
+            // When the WebView is focused and not scrollable, it means it has been scrolled to
+            // its edge (b/416347411). In that case, controller rotation should move focus to the
+            // next/previous focusable View.
+            boolean focusShouldLeaveWebView = false;
+            if (Utils.isWebView(sourceNode)) {
+                AccessibilityNodeInfo.AccessibilityAction scrollAction =
+                        direction == View.FOCUS_FORWARD
+                                ? ACTION_SCROLL_FORWARD
+                                : ACTION_SCROLL_BACKWARD;
+                if (!sourceNode.getActionList().contains(scrollAction)) {
+                    focusShouldLeaveWebView = true;
+                    L.d("Focus should leave WebView and move to an adjacent View");
+                }
+            }
+
             AccessibilityNodeInfo nextCandidate = null;
             // Virtual View hierarchies like WebViews and ComposeViews do not support focusSearch().
             AccessibilityNodeInfo virtualViewAncestor = findVirtualViewAncestor(candidate);
-            if (virtualViewAncestor != null) {
+            if (virtualViewAncestor != null && !focusShouldLeaveWebView) {
+                // Current focus is a virtual node.
                 nextCandidate =
                     findNextFocusableInVirtualRoot(virtualViewAncestor, candidate, direction);
-            }
-            if (nextCandidate == null) {
-                // If we aren't in a virtual node hierarchy, or there aren't any more focusable
-                // nodes within the virtual node hierarchy, use focusSearch().
+                if (nextCandidate == null || Utils.isVirtualView(nextCandidate)) {
+                    // nextCandidate == null happens when handling clockwise rotation from the last
+                    // virtual node, while Utils.isVirtualView(nextCandidate) happens when handling
+                    // counter-clock wise rotation from the first virtual node.
+                    // In either case, we need to move focus out of the virtual view hierarchy.
+                    if (Utils.isComposeView(virtualViewAncestor)
+                            && !virtualViewAncestor.isFocusable()) {
+                        // If the ComposeView is not focusable, ComposeView#focusSearch() will not
+                        // return the next focusable View as expected. Luckily, its only
+                        // child AndroidComposeView#focusSearch() will return the next focusable
+                        // View, so let's call focusSearch() on AndroidComposeView.
+                        nextCandidate = virtualViewAncestor.getChild(0);
+                        L.v("virtualViewAncestor is a non-focusable ComposeView");
+                    } else {
+                        // Otherwise, call focusSearch() on virtualViewAncestor.
+                        nextCandidate =  virtualViewAncestor;
+                        L.v("virtualViewAncestor is not a ComposeView or it's focusable");
+                    }
+                    do {
+                        nextCandidate = nextCandidate.focusSearch(direction);
+                    } while (nextCandidate != null && isInVirtualNodeHierarchy(nextCandidate));
+                    L.v("Moving focus out of virtual view hierarchy");
+                } else {
+                    L.v("Moving focus between virtual nodes");
+                }
+            } else {
+                // Current focus is a View.
                 nextCandidate = candidate.focusSearch(direction);
+                if (nextCandidate != null && isInVirtualNodeHierarchy(nextCandidate)) {
+                    virtualViewAncestor = findVirtualViewAncestor(nextCandidate);
+                    nextCandidate = findNextFocusableInVirtualRoot(
+                            virtualViewAncestor, virtualViewAncestor, direction);
+                    L.v("Moving focus into virtual view hierarchy");
+                } else {
+                    L.v("Moving focus between views");
+                }
             }
+
             AccessibilityNodeInfo candidateFocusArea =
                     nextCandidate == null ? null : getAncestorFocusArea(nextCandidate);
 
@@ -1037,8 +1086,7 @@ class Navigator {
      */
     @Nullable
     private AccessibilityNodeInfo findVirtualViewAncestor(@NonNull AccessibilityNodeInfo node) {
-        return mTreeTraverser.findNodeOrAncestor(node, /* targetPredicate= */ (nodeInfo) ->
-            Utils.isComposeView(nodeInfo) || Utils.isWebView(nodeInfo));
+        return mTreeTraverser.findNodeOrAncestor(node, Utils::isVirtualView);
     }
 
     /** Returns whether {@code node} is a {@code WebView} or is a descendant of one. */
