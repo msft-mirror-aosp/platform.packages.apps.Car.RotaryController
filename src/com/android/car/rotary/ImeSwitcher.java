@@ -172,15 +172,16 @@ class ImeSwitcher {
         mInputMethodObserver = null;
     }
 
-    /** Switches to the rotary IME or the touch IME if needed. */
+    /**
+     * Switches to the rotary IME when entering rotary mode, or to the touch IME when entering touch
+     * mode.
+     */
     void switchIme(boolean inRotaryMode) {
         String oldIme = getCurrentIme();
-        if ((inRotaryMode && mRotaryInputMethod.equals(oldIme))
-                || (!inRotaryMode && mTouchInputMethod.equals(oldIme))) {
-            return;
+        if (inRotaryMode != mRotaryInputMethod.equals(oldIme)) {
+            String newIme = inRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
+            setCurrentIme(oldIme, newIme);
         }
-        String newIme = inRotaryMode ? mRotaryInputMethod : mTouchInputMethod;
-        setCurrentIme(oldIme, newIme);
     }
 
     void dump(@NonNull DualDumpOutputStream dumpOutputStream, @NonNull String fieldName,
