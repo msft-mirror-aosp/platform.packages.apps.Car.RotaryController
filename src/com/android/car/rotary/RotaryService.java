@@ -2177,6 +2177,11 @@ public class RotaryService extends AccessibilityService implements
         long upTime = SystemClock.uptimeMillis();
         KeyEvent keyEvent = new KeyEvent(
                 /* downTime= */ upTime, /* eventTime= */ upTime, action, keyCode, /* repeat= */ 0);
+
+        // If a display is not specified when injecting an input event, the event will be routed to
+        // the display that currently has focus, which could be the cluster display. Since
+        // RotaryService is designed to work for the main display only, we hardcode the display ID.
+        keyEvent.setDisplayId(Display.DEFAULT_DISPLAY);
         boolean success = mInputManager.injectInputEvent(keyEvent,
                 InputManager.INJECT_INPUT_EVENT_MODE_ASYNC);
         L.successOrFailure("Injecting " + keyEvent, success);
