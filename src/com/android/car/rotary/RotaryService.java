@@ -1972,19 +1972,17 @@ public class RotaryService extends AccessibilityService implements
         ComponentName newActivity = packageName != null && className != null
                 ? new ComponentName(packageName.toString(), className.toString())
                 : null;
-        if (newActivity != null && newActivity.equals(mForegroundActivity)) {
+        if ((newActivity == null && mForegroundActivity == null)
+                || (newActivity != null && newActivity.equals(mForegroundActivity))) {
+            // Foreground activity stays the same.
             return;
         }
         mForegroundActivity = newActivity;
         mNavigator.updateAppWindowTaskId(window);
 
-        // Exit direct manipulation mode if the new Activity is in a new package.
-        // Note: There is no need to handle the case when mForegroundActivity is null because it
-        // couldn't be null in direct manipulation mode. The null check is just for precaution.
-        if (mInDirectManipulationMode && mForegroundActivity != null
-                && !mForegroundActivity.getPackageName().equals(packageName)) {
-            L.w("Exit direct manipulation mode because the foreground app has changed from "
-                    + mForegroundActivity.getPackageName() + " to " + packageName);
+        // Exit direct manipulation mode since the foreground Activity has changed.
+        if (mInDirectManipulationMode) {
+            L.w("Exit direct manipulation mode because the foreground app has changed");
             mInDirectManipulationMode = false;
         }
 
