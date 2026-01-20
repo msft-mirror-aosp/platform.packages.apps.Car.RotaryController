@@ -630,6 +630,13 @@ public class RotaryService extends AccessibilityService implements
         }
 
         mRotaryInputMethod = res.getString(R.string.rotary_input_method);
+        if (!TextUtils.isEmpty(mRotaryInputMethod)
+                && !Utils.isInstalledIme(mRotaryInputMethod, mInputMethodManager)) {
+            L.e("Rotary IME is specified to " + mRotaryInputMethod + " but not installed. "
+                    + "If you're sure you need a dedicated rotary IME, please install the specified"
+                    + " apk; otherwise please don't overload the config rotary_input_method");
+            mRotaryInputMethod = "";
+        }
         mDefaultTouchInputMethod = getDefaultTouchInputMethod(res, mInputMethodManager);
         if (mDefaultTouchInputMethod == null) {
             throw new IllegalStateException("No touch IME installed");
