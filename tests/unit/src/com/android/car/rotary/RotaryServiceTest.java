@@ -2363,6 +2363,92 @@ public class RotaryServiceTest {
         assertThat(mRotaryService.mForegroundActivity).isEqualTo(foregroundActivity);
     }
 
+    @Test
+    public void testOnAccessibilityEvent_typeWindowStateChanged2() {
+        initActivity(R.layout.rotary_service_test_2_activity);
+
+        Activity activity = mActivityRule.getActivity();
+        Button appButton3 = activity.findViewById(R.id.app_button3);
+        DirectManipulationHelper.setSupportsRotateDirectly(appButton3, true);
+        appButton3.post(() -> appButton3.requestFocus());
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        assertThat(appButton3.isFocused()).isTrue();
+        AccessibilityNodeInfo appButton3Node = createNode("app_button3");
+        mRotaryService.setFocusedNode(appButton3Node);
+        mRotaryService.mInRotaryMode = true;
+        assertThat(mRotaryService.mInDirectManipulationMode).isFalse();
+        assertThat(appButton3.isSelected()).isFalse();
+
+        // Click the center button of the controller to enter DM mode
+        int validDisplayId = CarOccupantZoneManager.DISPLAY_TYPE_MAIN;
+        KeyEvent centerButtonEventActionDown =
+                new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionDown));
+        KeyEvent centerButtonEventActionUp =
+                new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER);
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionUp));
+        assertThat(mRotaryService.mInDirectManipulationMode).isTrue();
+
+        AccessibilityEvent event = mock(AccessibilityEvent.class);
+        when(event.getSource()).thenReturn(appButton3Node);
+        when(event.getEventType()).thenReturn(TYPE_WINDOW_STATE_CHANGED);
+        final String packageName = "package.name";
+        final String className = "class.name";
+
+        // Should exit DM mode if className and packageName are not null
+        // because foreground activity is changed
+        when(event.getPackageName()).thenReturn(packageName);
+        when(event.getClassName()).thenReturn(className);
+        mRotaryService.onAccessibilityEvent(event);
+        assertThat(mRotaryService.mInDirectManipulationMode).isFalse();
+
+        // Should exit DM mode if ClassName is null
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionUp));
+        assertThat(mRotaryService.mInDirectManipulationMode).isTrue();
+
+        when(event.getPackageName()).thenReturn(packageName);
+        when(event.getClassName()).thenReturn(null);
+        mRotaryService.onAccessibilityEvent(event);
+        assertThat(mRotaryService.mInDirectManipulationMode).isFalse();
+
+        // reset foreground activity
+        when(event.getPackageName()).thenReturn(packageName);
+        when(event.getClassName()).thenReturn(className);
+        mRotaryService.onAccessibilityEvent(event);
+        assertThat(mRotaryService.mInDirectManipulationMode).isFalse();
+
+        //enter DM mode
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionUp));
+        assertThat(mRotaryService.mInDirectManipulationMode).isTrue();
+
+        // Should exit DM mode if PackageName is null
+        when(event.getPackageName()).thenReturn(null);
+        when(event.getClassName()).thenReturn(className);
+        mRotaryService.onAccessibilityEvent(event);
+        assertThat(mRotaryService.mInDirectManipulationMode).isFalse();
+
+        // reset foreground activity
+        when(event.getPackageName()).thenReturn(packageName);
+        when(event.getClassName()).thenReturn(className);
+        mRotaryService.onAccessibilityEvent(event);
+        assertThat(mRotaryService.mInDirectManipulationMode).isFalse();
+
+        //enter DM mode
+        mRotaryService.onKeyEvents(validDisplayId,
+                Collections.singletonList(centerButtonEventActionUp));
+        assertThat(mRotaryService.mInDirectManipulationMode).isTrue();
+
+        // Should exit DM mode if className and packageName are null
+        when(event.getPackageName()).thenReturn(null);
+        when(event.getClassName()).thenReturn(null);
+        mRotaryService.onAccessibilityEvent(event);
+        assertThat(mRotaryService.mInDirectManipulationMode).isFalse();
+    }
+
     /**
      * Tests Direct Manipulation mode in the following view tree:
      * <pre>
